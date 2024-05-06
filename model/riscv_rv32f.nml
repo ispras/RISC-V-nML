@@ -1,0 +1,567 @@
+/*
+ * Copyright 2017-2019 ISP RAS (http://www.ispras.ru)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+#ifndef RISCV_RV32F_INCLUDED
+#define RISCV_RV32F_INCLUDED
+
+//==================================================================================================
+// RV32F Standard Extension
+//==================================================================================================
+
+var tmp_ui3 [card(3)] // for rm
+
+/*  FLW +
+    FSW +
+    FMADD.S +
+    FMSUB.S +
+    FNMSUB.S +
+    FNMADD.S +
+    FADD.S +
+    FSUB.S +
+    FMUL.S +
+    FDIV.S +
+    FSQRT.S +
+    FSGNJ.S +
+    FSGNJN.S +
+    FSGNJX.S +
+    FMIN.S +
+    FMAX.S +
+    FCVT.W.S +
+    FCVT.WU.S +
+    FMV.X.W (FMV.X.S) +
+    FEQ.S +
+    FLT.S +
+    FLE.S +
+    FCLASS.S
+    FCVT.S.W +
+    FCVT.S.WU +
+    FMV.W.X (FMV.S.X) +
+*/
+/*
+Floating-point loads and stores use the same base+offset addressing mode as the integer base ISA,
+with a base address in register rs1 and a 12-bit signed byte offset. The FLW instruction loads
+a single-precision foating-point value from memory into foating-point register rd. FSW stores a
+single-precision value from foating-point register rs2 to memory.
+*/
+op flw(rd: F, rs1: X, imm: int(12))
+  syntax = format("flw %s, %d(%s)", rd.syntax, imm, rs1.syntax)
+  image  = format("%12s%s010%s0000111", imm, rs1.image, rd.image)
+  action = {
+    tmp_address = rs1 + sign_extend(XWORD, imm);
+    load_data(MEM_WORD, tmp_address).action; // return load_value
+    rd = -1;
+    rd<31..0> = load_value<31..0>;
+  }
+
+op fsw(rs2: F, rs1: X, imm: int(12))
+  syntax = format("fsw %s, %d(%s)", rs2.syntax, imm, rs1.syntax)
+  image  = format("%7s%5s%5s010%5s0100111", imm<11..5>, rs2.image, rs1.image, imm<4..0>)
+  action = {
+    tmp_address = rs1 + sign_extend(XWORD, imm);
+    store_data(MEM_WORD, tmp_address, zero_extend(XWORD, rs2<31..0>)).action;
+  }
+
+op fadd_s(rd: F, rs1: F, rs2: F)
+  syntax = format("fadd.s %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000000%s%s%3s%s1010011", rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    temp_fps<31..0> = rs1<31..0>;
+    temp_fps2<31..0> = rs2<31..0>;
+    rd = -1;
+    temp_fps3 = temp_fps + temp_fps2;
+    rd<31..0> = temp_fps3<31..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fsub_s(rd: F, rs1: F, rs2: F)
+  syntax = format("fsub.s %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000100%s%s%3s%s1010011", rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    temp_fps = cast(FLOAT32, rs1<31..0>) - cast(FLOAT32, rs2<31..0>);
+    rd = -1;
+    rd<31..0> = temp_fps<31..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fmul_s(rd: F, rs1: F, rs2: F)
+  syntax = format("fmul.s %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0001000%s%s%3s%s1010011", rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    temp_fps = cast(FLOAT32, rs1<31..0>) * cast(FLOAT32, rs2<31..0>);
+    rd = -1;
+    rd<31..0> = temp_fps<31..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fdiv_s(rd: F, rs1: F, rs2: F)
+  syntax = format("fdiv.s %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0001100%5s%5s%3s%5s1010011", rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    // set rounding mode
+    setSFRoundingMode(RM_RNE).action;
+
+    temp_fps = cast(FLOAT32, rs1<31..0>) / cast(FLOAT32, rs2<31..0>);
+    rd = -1;
+    rd<31..0> = temp_fps<31..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fmin_s(rd: F, rs1: F, rs2: F)
+  syntax = format("fmin.s %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0010100%5s%5s%3s%5s1010011", rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    //RoundingMode = RM_RNE;
+    tmp_ui3 = float_rounding_mode;
+    setSFRoundingMode(RM_RNE).action;
+
+    temp_fps = cast(FLOAT32, rs1<31..0>);
+    temp_fps2 = cast(FLOAT32, rs2<31..0>);
+    rd = -1;
+    tmp_word = float_exception_flags;
+    trace("float_exception_flags: %x", tmp_word);
+    if temp_fps < temp_fps2 then
+      rd<31..0> = temp_fps<31..0>;
+    else
+      rd<31..0> = temp_fps2<31..0>;
+    endif;
+    tmp_word = float_exception_flags;
+    trace("float_exception_flags: %x", tmp_word);
+
+    float_rounding_mode = tmp_ui3;
+
+    process_float_exception_flags().action;
+  }
+
+op fmax_s(rd: F, rs1: F, rs2: F)
+  syntax = format("fmax.s %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0010100%5s%5s%3s%5s1010011", rs2.image, rs1.image, coerce(card(3), RM_RTZ), rd.image)
+  action = {
+    // save the original value
+    tmp_ui3 = float_rounding_mode;
+    //RoundingMode = RM_RTZ;
+    setSFRoundingMode(RM_RTZ).action;
+
+    temp_fps = cast(FLOAT32, rs1<31..0>);
+    temp_fps2 = cast(FLOAT32, rs2<31..0>);
+    rd = -1;
+    float_exception_flags = 0;
+    if temp_fps2 < temp_fps then
+      rd<31..0> = temp_fps<31..0>;
+    else
+      rd<31..0> = temp_fps2<31..0>;
+    endif;
+
+    // return the original value
+    float_rounding_mode = tmp_ui3;
+
+    process_float_exception_flags().action;
+  }
+
+op fsqrt_s(rd: F, rs1: F)
+  syntax = format("fsqrt.s %s, %s", rd.syntax, rs1.syntax)
+  image  = format("0101100%5s%5s%3s%5s1010011", "00000", rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    temp_fps = sqrt(cast(FLOAT32, rs1<31..0>));
+    rd = -1;
+    rd<31..0> = temp_fps<31..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fsgnj_s(rd: F, rs1: F, rs2: F)
+  syntax = format("fsgnj.s %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0010000%5s%5s%3s%5s1010011", rs2.image, rs1.image, "000", rd.image)
+  action = {
+    temp_fps<30..0> = rs1<30..0>;
+    temp_fps<31> = rs2<31>;
+    rd = -1;
+    rd<31..0> = temp_fps<31..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fsgnjn_s(rd: F, rs1: F, rs2: F)
+  syntax = format("fsgnjn.s %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0010000%5s%5s%3s%5s1010011", rs2.image, rs1.image, "001", rd.image)
+  action = {
+    temp_fps<30..0> = rs1<30..0>;
+    temp_fps<31> = ~rs2<31>;
+    rd = -1;
+    rd<31..0> = temp_fps<31..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fsgnjx_s(rd: F, rs1: F, rs2: F)
+  syntax = format("fsgnjx.s %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0010000%5s%5s%3s%5s1010011", rs2.image, rs1.image, "010", rd.image)
+  action = {
+    temp_fps<30..0> = rs1<30..0>;
+    temp_fps<31> = rs1<31> ^ rs2<31>;
+    rd = -1;
+    rd<31..0> = temp_fps<31..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fmadd_s(rd: F, rs1: F, rs2: F, rs3: F)
+  syntax = format("fmadd.s %s, %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax, rs3.syntax)
+  image  = format("%5s00%5s%5s%3s%5s1000011", rs3.image, rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    temp_fps = cast(FLOAT32, rs1<31..0>) * cast(FLOAT32, rs2<31..0>) + cast(FLOAT32, rs3<31..0>);
+    rd = -1;
+    rd<31..0> = temp_fps<31..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fmsub_s(rd: F, rs1: F, rs2: F, rs3: F)
+  syntax = format("fmsub.s %s, %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax, rs3.syntax)
+  image  = format("%5s00%5s%5s%3s%5s1000111", rs3.image, rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    temp_fps = cast(FLOAT32, rs1<31..0>) * cast(FLOAT32, rs2<31..0>) - cast(FLOAT32, rs3<31..0>);
+    rd = -1;
+    rd<31..0> = temp_fps<31..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fnmadd_s(rd: F, rs1: F, rs2: F, rs3: F)
+  syntax = format("fnmadd.s %s, %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax, rs3.syntax)
+  image  = format("%5s00%5s%5s%3s%5s1001111", rs3.image, rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    tmp_int1 = -1;
+    temp_fps2 = int_to_float(FLOAT32, tmp_int1);
+    temp_fps = temp_fps2 * cast(FLOAT32, rs1<31..0>) *
+               cast(FLOAT32, rs2<31..0>) - cast(FLOAT32, rs3<31..0>);
+    rd = -1;
+    rd<31..0> = temp_fps<31..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fnmsub_s(rd: F, rs1: F, rs2: F, rs3: F)
+  syntax = format("fnmsub.s %s, %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax, rs3.syntax)
+  image  = format("%5s00%5s%5s%3s%5s1001011", rs3.image, rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    tmp_int1 = -1;
+    temp_fps2 = int_to_float(FLOAT32, tmp_int1);
+    temp_fps = temp_fps2 * cast(FLOAT32, rs1<31..0>) *
+               cast(FLOAT32, rs2<31..0>) + cast(FLOAT32, rs3<31..0>);
+    rd = -1;
+    rd<31..0> = temp_fps<31..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fcvt_w_s(rd: X, rs1: F, op_round_mod: card(3))
+  syntax = format("fcvt.w.s %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1100000%5s%5s%3s%5s1010011", "00000", rs1.image, op_round_mod, rd.image)
+  action = {
+    //coerce(card(3), RM_RNE)
+    tmp_ui3 = float_rounding_mode;
+    setSFRoundingMode(op_round_mod).action;
+
+    tmp_word = float_to_int(WORD, cast(FLOAT32, rs1<31..0>));
+    rd = sign_extend(XWORD, tmp_word);
+
+    float_rounding_mode = tmp_ui3; // return the original value
+
+    process_float_exception_flags().action;
+  }
+
+// TODO:
+op fcvt_w_s2(rd: X, rs1: F)
+  syntax = format("%s", fcvt_w_s(rd, rs1, coerce(card(3), RM_RTZ)).syntax)
+  image  = format("%32s", fcvt_w_s(rd, rs1, coerce(card(3), RM_RTZ)).image)
+  action = {
+    fcvt_w_s(rd, rs1, coerce(card(3), RM_RTZ)).action;
+  }
+
+op fcvt_wu_s(rd: X, rs1: F, op_round_mod: card(3))
+  syntax = format("fcvt.wu.s %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1100000%5s%5s%3s%5s1010011", "00001", rs1.image, op_round_mod, rd.image)
+  action = {
+    //coerce(card(3), RM_RNE)
+    tmp_ui3 = float_rounding_mode;
+    setSFRoundingMode(op_round_mod).action;
+
+    if rs1<31> == 1 then
+      // TODO: jSoftFloat
+      temp_fps<31..0> = rs1<31..0>;
+      if is_nan(temp_fps) then rd = -1;
+      else rd = 0; endif;
+    else
+      tmp_dword = float_to_int(DWORD, cast(FLOAT32, rs1<31..0>));
+      tmp_word = tmp_dword<31..0>;
+      rd = sign_extend(XWORD, tmp_word);
+    endif;
+
+    float_rounding_mode = tmp_ui3; // return the original value
+
+    process_float_exception_flags().action;
+    if rs1<31> == 1 then
+      // TODO: jSoftFloat
+      tmp_dword = float_to_int(DWORD, cast(FLOAT32, XREG[0]<1>::rs1<30..0>));
+      tmp_word = float_exception_flags;
+      if tmp_word == 0 then
+        FFLAGS_EXCEP<4> = 0b1;
+        FCSR_EXCEP<4> = 0b1;
+      else
+        process_float_exception_flags().action;
+      endif;
+    endif;
+  }
+
+// TODO:
+op fcvt_wu_s2(rd: X, rs1: F)
+  syntax = format("%s", fcvt_wu_s(rd, rs1, coerce(card(3), RM_RTZ)).syntax)
+  image  = format("%32s", fcvt_wu_s(rd, rs1, coerce(card(3), RM_RTZ)).image)
+  action = {
+    fcvt_wu_s(rd, rs1, coerce(card(3), RM_RTZ)).action;
+  }
+
+op fcvt_s_w(rd: F, rs1: X)
+  syntax = format("fcvt.s.w %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1101000%5s%5s%3s%5s1010011", "00000", rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    rd = -1;
+    rd<31..0> = int_to_float(FLOAT32, rs1<31..0>);
+  }
+
+op fcvt_s_wu(rd: F, rs1: X)
+  syntax = format("fcvt.s.wu %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1101000%5s%5s%3s%5s1010011", "00001", rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    tmp_dword = 0;
+    tmp_dword<31..0> = rs1<31..0>;
+    rd = -1;
+    rd<31..0> = int_to_float(FLOAT32, tmp_dword);
+  }
+
+op fmv_x_w(rd: X, rs1: F) // fmv_x_s
+  syntax = format("fmv.x.s %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1110000%5s%5s%3s%5s1010011", "00000", rs1.image, "000", rd.image)
+  action = {
+    rd = sign_extend(XWORD, rs1<31..0>);
+  }
+
+op fmv_w_x(rd: F, rs1: X) // fmv_s_x
+  syntax = format("fmv.s.x %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1111000%5s%5s%3s%5s1010011", "00000", rs1.image, "000", rd.image)
+  action = {
+    rd = -1;
+    rd<31..0> = rs1<31..0>;
+  }
+
+/*  Floating-point compare instructions perform the specified comparison (equal, less than, or less
+  than or equal) between floating-point registers rs1 and rs2 and record the Boolean result in
+  integer register rd. */
+op feq_s(rd: X, rs1: F, rs2: F)
+  syntax = format("feq.s %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("1010000%5s%5s%3s%5s1010011", rs2.image, rs1.image, "010", rd.image)
+  action = {
+    rd = 0;
+    temp_fps = cast(FLOAT32, rs1<31..0>);
+    temp_fps2 = cast(FLOAT32, rs2<31..0>);
+
+    if is_nan(temp_fps) && is_nan(temp_fps2) then
+      rd = 0;
+    elif temp_fps == temp_fps2 then
+      rd = 1;
+    endif;
+
+    // TODO: jSoftFloat
+    if is_signaling_nan(temp_fps) && is_signaling_nan(temp_fps2) then
+      FFLAGS_EXCEP<4> = 0b1;
+      FCSR_EXCEP<4> = 0b1;
+    else
+      process_float_exception_flags().action;
+    endif;
+  }
+
+op flt_s(rd: X, rs1: F, rs2: F)
+  syntax = format("flt.s %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("1010000%5s%5s%3s%5s1010011", rs2.image, rs1.image, "001", rd.image)
+  action = {
+    rd = 0;
+    temp_fps = cast(FLOAT32, rs1<31..0>);
+    temp_fps2 = cast(FLOAT32, rs2<31..0>);
+
+    if temp_fps < temp_fps2 then
+      rd = 1;
+    endif;
+
+    // TODO: jSoftFloat
+    if is_nan(temp_fps) && is_nan(temp_fps2) then
+      FFLAGS_EXCEP<4> = 0b1;
+      FCSR_EXCEP<4> = 0b1;
+    else
+      process_float_exception_flags().action;
+    endif;
+  }
+
+op fle_s(rd: X, rs1: F, rs2: F)
+  syntax = format("fle.s %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("1010000%5s%5s%3s%5s1010011", rs2.image, rs1.image, "000", rd.image)
+  action = {
+    rd = 0;
+    temp_fps = cast(FLOAT32, rs1<31..0>);
+    temp_fps2 = cast(FLOAT32, rs2<31..0>);
+
+    if temp_fps <= temp_fps2 then
+      rd = 1;
+    endif;
+
+    // TODO: jSoftFloat
+    if is_nan(temp_fps) && is_nan(temp_fps2) then
+      FFLAGS_EXCEP<4> = 0b1;
+      FCSR_EXCEP<4> = 0b1;
+    else
+      process_float_exception_flags().action;
+    endif;
+  }
+
+/*TODO:
+    0 rs1 is -infinity.
+    1 rs1 is a negative normal number.
+    2 rs1 is a negative subnormal number.
+    3 rs1 is -0.
+    4 rs1 is +0.
+    5 rs1 is a positive subnormal number.
+    6 rs1 is a positive normal number.
+    7 rs1 is +infinity.
+    8 rs1 is a signaling NaN.
+    9 rs1 is a quiet NaN.
+    */
+var sign_bit [BIT]
+var exponent [card(8)]
+var precision [card(23)]
+
+op fclass_s(rd: X, rs1: F)
+  syntax = format("fclass.s %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1110000%5s%5s%3s%5s1010011", "00000", rs1.image, "001", rd.image)
+  action = {
+    temp_fps = cast(FLOAT32, rs1<31..0>);
+    sign_bit = rs1<31>;
+    exponent = rs1<30..23>;
+    precision = rs1<22..0>;
+    rd = 0;
+
+    if sign_bit == 1 && exponent == coerce(card(8), 0xff) && precision == 0 then rd<0> = 1;
+    elif sign_bit == 1 && exponent == 0 && precision == 0 then rd<3> = 1;
+    elif sign_bit == 0 && exponent == 0 && precision == 0 then rd<4> = 1;
+    elif sign_bit == 0 && exponent == coerce(card(8), 0xff) && precision == 0 then rd<7> = 1;
+    elif is_signaling_nan(temp_fps) then rd<8> = 1;
+    elif is_nan(temp_fps) then rd<9> = 1;
+    elif sign_bit == 0 && exponent == coerce(card(8), 0) then rd<5> = 1;
+    elif sign_bit == 1 && exponent == coerce(card(8), 0) then rd<2> = 1;
+    elif sign_bit == 1 then rd<1> = 1; // TODO:
+    elif sign_bit == 0 then rd<6> = 1; // TODO:
+    else
+      rd = 0;
+    endif;
+  }
+
+//==================================================================================================
+// Pseudoinstructions
+//==================================================================================================
+
+// Copy single-precision register
+pseudo op fmv_s(rd: F, rs: F)
+  syntax = format("fmv.s %s, %s", rd.syntax, rs.syntax)
+  image  = format("%32s", fsgnj_s(rd, rs, rs).image)
+  action = {
+    fsgnj_s(rd, rs, rs).action;
+  }
+
+// Single-precision absolute value
+pseudo op fabs_s(rd: F, rs: F)
+  syntax = format("fabs.s %s, %s", rd.syntax, rs.syntax)
+  image  = format("%32s", fsgnjx_s(rd, rs, rs).image)
+  action = {
+    fsgnjx_s(rd, rs, rs).action;
+  }
+
+// Single-precision negate
+pseudo op fneg_s(rd: F, rs: F)
+  syntax = format("fneg.s %s, %s", rd.syntax, rs.syntax)
+  image  = format("%32s", fsgnjn_s(rd, rs, rs).image)
+  action = {
+    fsgnjn_s(rd, rs, rs).action;
+  }
+
+// The same as FMV.X.W (obsolete name for backward compatibility)
+pseudo op fmv_x_s(rd: X, rs1: F)
+  syntax = format("fmv.x.s %s, %s", rd.syntax, rs1.syntax)
+  image  = format("%s", fmv_x_w(rd, rs1).image)
+  action = {
+    fmv_x_w(rd, rs1).action;
+  }
+
+// The same as FMV.W.X (obsolete name for backward compatibility)
+pseudo op fmv_s_x(rd: F, rs1: X)
+  syntax = format("fmv.s.x %s, %s", rd.syntax, rs1.syntax)
+  image  = format("%s", fmv_w_x(rd, rs1).image)
+  action = {
+    fmv_w_x(rd, rs1).action;
+  }
+
+op rv32f_pseudo = fmv_s
+                | fabs_s
+                | fneg_s
+                | fmv_x_s
+                | fmv_s_x
+
+//==================================================================================================
+
+op rv32f = flw
+         | fsw
+         | fadd_s
+         | fsub_s
+         | fmul_s
+         | fdiv_s
+         | fmin_s
+         | fmax_s
+         | fsqrt_s
+         | fsgnj_s
+         | fsgnjn_s
+         | fsgnjx_s
+         | fmadd_s
+         | fmsub_s
+         | fnmadd_s
+         | fnmsub_s
+         | fcvt_w_s
+         | fcvt_wu_s
+         | fcvt_w_s2 //
+         | fcvt_wu_s2 //
+         | fcvt_s_w
+         | fcvt_s_wu
+         | fmv_x_w
+         | fmv_w_x
+         | feq_s
+         | flt_s
+         | fle_s
+         | fclass_s
+         | rv32f_pseudo
+
+//==================================================================================================
+
+#endif

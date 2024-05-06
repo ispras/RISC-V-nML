@@ -1,0 +1,194 @@
+/*
+ * Copyright 2017-2019 ISP RAS (http://www.ispras.ru)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+#ifndef RISCV_RV32M_INCLUDED
+#define RISCV_RV32M_INCLUDED
+
+//==================================================================================================
+// RV32M Standard Extension
+//==================================================================================================
+
+/*
+  Instructions (number: 8):
+    MUL +
+    MULH +
+    MULHSU +
+    MULHU +
+    DIV +
+    DIVU +
+    REM +
+    REMU +
+*/
+
+//==================================================================================================
+// Temporary Variables
+//==================================================================================================
+
+// Stores multiplication result
+var tmp_rv32m[XDWORD]
+
+//==================================================================================================
+// Instructions
+//==================================================================================================
+
+/*
+  MUL (R-type)
+  MULH (R-type)
+  MULHSU (R-type)
+  MULHU (R-type)
+
+  Format: mul rd, rs1, rs2
+          mulh rd, rs1, rs2
+          mulhsu rd, rs1, rs2
+          mulhu rd, rs1, rs2
+
+  MUL performs an XLEN-bit * XLEN-bit multiplication and places the lower XLEN bits in the
+  destination register. MULH, MULHU, and MULHSU perform the same multiplication but return
+  the upper XLEN bits of the full 2*XLEN-bit product, for signed*signed, unsigned*unsigned,
+  and signed*unsigned multiplication respectively.
+
+  If both the high and low bits of the same product are required, then the recommended code
+  sequence is: MULH[[S]U] rdh, rs1, rs2; MUL rdl, rs1, rs2 (source register specifiers must be
+  in same order and rdh cannot be the same as rs1 or rs2). Microarchitectures can then fuse these
+  into a single multiply operation instead of performing two separate multiplies.
+*/
+op mul(rd: X, rs1: X, rs2: X)
+  syntax = format("mul %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000001%s%s000%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    rd = rs1 * rs2;
+  }
+
+op mulh(rd: X, rs1: X, rs2: X)
+  syntax = format("mulh %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000001%s%s001%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    tmp_rv32m = sign_extend(XLONG, rs1) * sign_extend(XLONG, rs2);
+    rd = tmp_rv32m<2*XLEN-1..XLEN>;
+  }
+
+op mulhu(rd: X, rs1: X, rs2: X)
+  syntax = format("mulhu %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000001%s%s011%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    tmp_rv32m = zero_extend(XDWORD, rs1) * zero_extend(XDWORD, rs2);
+    rd = tmp_rv32m<2*XLEN-1..XLEN>;
+  }
+
+op mulhsu(rd: X, rs1: X, rs2: X)
+  syntax = format("mulhsu %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000001%s%s010%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    tmp_rv32m = sign_extend(XLONG, rs1) * zero_extend(XLONG, rs2);
+    rd = tmp_rv32m<2*XLEN-1..XLEN>;
+  }
+
+/*
+  DIV (R-type)
+  DIVU (R-type)
+  REM (R-type)
+  REMU (R-type)
+
+  Format: div rd, rs1, rs2
+          divu rd, rs1, rs2
+          rem rd, rs1, rs2
+          remu rd, rs1, rs2
+
+  DIV and DIVU perform signed and unsigned integer division of XLEN bits by XLEN bits.
+  REM and REMU provide the remainder of the corresponding division operation.
+  If both the quotient and remainder are required from the same division, the recommended code
+  sequence is: DIV[U] rdq, rs1, rs2; REM[U] rdr, rs1, rs2 (rdq cannot be the same as rs1 or rs2).
+  Microarchitectures can then fuse these into a single divide operation instead of performing two
+  separate divides.
+
+  The semantics for division by zero and division overflow are summarized in table below.
+  The quotient of division by zero has all bits set, i.e. 2**XLEN − 1 for unsigned division
+  or −1 for signed division. The remainder of division by zero equals the dividend.
+
+  Signed division overflow occurs only when the most-negative integer, −2**(XLEN−1), is divided
+  by −1. The quotient of signed division overflow is equal to the dividend, and the remainder is
+  zero. Unsigned division overflow cannot occur.
+
+  | Condition              |  Dividend  | Divisor ||     DIVU    | REMU |      DIV     |  REM  |
+  | Division by zero       |      x     |    0    || 2**XLEN − 1 |   x  |      -1      |   x   |
+  | Overflow (signed only) |−2**(XLEN−1)|   -1    ||      -      |   -  | −2**(XLEN−1) |   0   |
+*/
+op div(rd: X, rs1: X, rs2: X)
+  syntax = format("div %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000001%s%s100%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    if rs2 == 0 then
+      rd = -1;
+    elif rs1 == 1 << (XLEN - 1) && rs2 == -1 then
+      rd = rs1;
+    else
+      rd = cast(XINT, rs1) / cast(XINT, rs2);
+    endif;
+  }
+
+op divu(rd: X, rs1: X, rs2: X)
+  syntax = format("divu %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000001%s%s101%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    if rs2 == 0 then
+      rd = (1 << XLEN) - 1;
+    else
+      rd = cast(XWORD, rs1) / cast(XWORD, rs2);
+    endif;
+  }
+
+op rem(rd: X, rs1: X, rs2: X)
+  syntax = format("rem %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000001%s%s110%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    if rs2 == 0 then
+      rd = rs1;
+    elif rs1 == 1 << (XLEN - 1) && rs2 == -1 then
+      rd = 0;
+    else
+      rd = cast(XINT, rs1) % cast(XINT, rs2);
+    endif;
+  }
+
+op remu(rd: X, rs1: X, rs2: X)
+  syntax = format("remu %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000001%s%s111%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    if rs2 == 0 then
+      rd = rs1;
+    else
+      rd = cast(XWORD, rs1) % cast(XWORD, rs2);
+    endif;
+  }
+
+//==================================================================================================
+// Instruction Groups
+//==================================================================================================
+
+op rv32m = mul
+         | mulh
+         | mulhsu
+         | mulhu
+         | div
+         | divu
+         | rem
+         | remu
+
+//==================================================================================================
+// The End
+//==================================================================================================
+
+#endif

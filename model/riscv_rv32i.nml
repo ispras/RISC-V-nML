@@ -1,0 +1,987 @@
+/*
+ * Copyright 2017-2020 ISP RAS (http://www.ispras.ru)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+#ifndef RISCV_RV32I_INCLUDED
+#define RISCV_RV32I_INCLUDED
+
+//==================================================================================================
+// RV32I Base Instruction Set
+//==================================================================================================
+
+/*
+  Instructions (number: 37):
+    LUI +
+    AUIPC +
+    JAL +
+    JALR +
+    BEQ +
+    BNE +
+    BLT +
+    BGE +
+    BLTU +
+    BGEU +
+    LB +
+    LH +
+    LW +
+    LBU +
+    LHU +
+    SB +
+    SH +
+    SW +
+    ADDI +
+    SLTI +
+    SLTIU +
+    XORI +
+    ORI +
+    ANDI +
+    SLLI +
+    SRLI +
+    SRAI +
+    SLL +
+    SRL +
+    SRA +
+    ADD +
+    SUB +
+    SLT +
+    SLTU +
+    XOR +
+    OR +
+    AND +
+
+  Pseudoinstructions (number: 16):
+    NOP +
+    MV +
+    NOT +
+    NEG +
+    SEQZ +
+    SNEZ +
+    SLTZ +
+    SGTZ +
+    J +
+    JR +
+    BEQZ +
+    BNEZ +
+    BLEZ +
+    BGEZ +
+    BLTZ +
+    BGTZ +
+*/
+
+//==================================================================================================
+// Instructions
+//==================================================================================================
+
+/*
+  LUI : Load Upper Immediate (U-type)
+  Format: lui rd, imm
+
+  RV32I:
+  LUI (load upper immediate) is used to build 32-bit constants and uses the U-type
+  format. LUI places the U-immediate value in the top 20 bits of the destination
+  register rd, filling in the lowest 12 bits with zeros.
+
+  RV64I:
+  LUI (load upper immediate) uses the same opcode as RV32I. LUI places the 20-bit
+  U-immediate into bits 31–12 of register rd and places zero in the lowest 12 bits.
+  The 32-bit result is sign-extended to 64 bits.
+*/
+op lui(rd: X, imm: card(20))
+  syntax = format("lui %s, 0x%x", rd.syntax, imm)
+  image  = format("%20s%s0110111", imm, rd.image)
+  action = {
+    rd = sign_extend(XWORD, imm) << 12;
+  }
+
+/*
+  AUIPC : Add Upper Immediate to PC (U-type)
+  Format: auipc rd, imm
+
+  RV32I:
+  AUIPC (add upper immediate to pc) is used to build pc-relative addresses and uses
+  the U-type format. AUIPC forms a 32-bit offset from the 20-bit U-immediate, filing
+  in the lowest 12 bits with zeros, adds this offset to the pc, then places the result
+  in register rd.
+
+  RV64I:
+  AUIPC (add upper immediate to pc) uses the same opcode as RV32I. AUIPC is used to
+  build pc-relative addresses and uses the U-type format. AUIPC appends 12 low-order
+  zero bits to the 20-bit U-immediate, sign-extends the result to 64 bits, then adds
+  it to the pc and places the result in register rd.
+*/
+op auipc(rd: X, imm: card(20))
+  syntax = format("auipc %s, 0x%x", rd.syntax, imm)
+  image  = format("%20s%s0010111", imm, rd.image)
+  action = {
+    rd = PC + (sign_extend(XWORD, imm) << 12);
+  }
+
+/*
+  JAL: Jump and Link (J-type)
+
+  Format: jal rd, imm
+
+  The jump and link (JAL) instruction uses the J-type format, where the J-immediate
+  encodes a signed offset in multiples of 2 bytes. The offset is sign-extended and added
+  to the pc to form the jump target address. Jumps can therefore target a +/- 1MiB range.
+  JAL stores the address of the instruction following the jump (pc+4) into register rd.
+  The standard software calling convention uses x1 as the return address register
+  and x5 as an alternate link register.
+
+  The JAL instruction can generate a misaligned instruction fetch exception if the target
+  address is not aligned to a four-byte boundary.
+*/
+var jump_imm20[card(20)]
+
+mode JUMP_IMM(imm: int(20)) = imm
+  syntax = format("0x%x", imm)
+  image  = format("%1s%10s%1s%8s", imm<19>, imm<9..0>, imm<10>, imm<18..11>)
+
+label mode JUMP_LABEL_JAL(target: WORD, current: WORD) = target<20..1> - current<20..1>
+  init = {
+    jump_imm20 = target<20..1> - current<20..1>;
+  }
+  syntax = ""
+  image  = format("%1s%10s%1s%8s",
+                  jump_imm20<19>, jump_imm20<9..0>, jump_imm20<10>, jump_imm20<18..11>)
+
+mode JUMP_ADDR_JAL = JUMP_LABEL_JAL | JUMP_IMM
+
+op jal(rd: X, imm: JUMP_ADDR_JAL)
+  syntax = format("jal %s, %s", rd.syntax, imm.syntax)
+  image  = format("%20s%5s1101111", imm.image, rd.image)
+  action = {
+    rd = PC + 4;
+    PC = PC + (sign_extend(XWORD, imm) << 1);
+  }
+
+/*
+  JALR: Jump and Link Register (I-type)
+
+  Format: jalr rd, rs1, imm
+
+  The indirect jump instruction JALR (jump and link register) uses the I-type encoding.
+  The target address is obtained by adding the 12-bit signed I-immediate to the register rs1,
+  then setting the least-significant bit of the result to zero. The address of the instruction
+  following the jump (pc+4) is written to register rd. Register x0 can be used as the destination
+  if the result is not required.
+
+  The JALR instructions can generate a misaligned instruction fetch exception if the target
+  address is not aligned to a four-byte boundary.
+*/
+op jalr(rd: X, rs1: X, imm: int(12))
+  syntax = format("jalr %s, %s, %d", rd.syntax, rs1.syntax, imm)
+  image  = format("%s%s000%s1100111", imm, rs1.image, rd.image)
+  action = {
+    rd = PC + 4;
+    PC = rs1 + ((sign_extend(XWORD, imm) >> 1) << 1);
+  }
+
+/*
+  BEQ: Branch Equal (SB-type)
+  BNE: Branch Not Equal (SB-type)
+
+  Format: beq rs1, rs2, imm
+          bne rs1, rs2, imm
+
+  All branch instructions use the SB-type instruction format. The 12-bit B-immediate
+  encodes signed offsets in multiples of 2, and is added to the current pc to give the
+  target address. The conditional branch range is +/- 4 KiB. Branch instructions compare
+  two registers.
+
+  BEQ and BNE take the branch if registers rs1 and rs2 are equal or unequal respectively.
+*/
+var jump_imm12[card(12)]
+
+label mode BRANCH_LABEL(target: WORD, current: WORD) = target<12..1> - current<12..1>
+  init = {
+    jump_imm12 = target<12..1> - current<12..1>;
+  }
+  syntax = ""
+  image = format("%s", target<12..1> - current<12..1>)
+
+mode BRANCH_IMM(imm: card(12)) = imm
+  init = {
+    jump_imm12 = imm;
+  }
+  syntax = format("%d", coerce(int(12), imm))
+  image = format("%s", imm)
+
+mode BRANCH_OFFSET = BRANCH_LABEL | BRANCH_IMM
+
+internal op branch_image(rs1: X, rs2: X, imm: BRANCH_OFFSET, branch_index: card(3))
+  syntax = format("")
+  image  = format("%1s%6s%5s%5s%3s%4s%1s1100011", imm<11>, imm<9..4>,
+                  rs2.image, rs1.image, branch_index, imm<3..0>, imm<10>)
+  action = {}
+
+op beq(rs1: X, rs2: X, imm: BRANCH_OFFSET)
+  syntax = format("beq %s, %s, %s", rs1.syntax, rs2.syntax, imm.syntax)
+  image  = format("%s", branch_image(rs1, rs2, imm, 0b000).image)
+  action = {
+    if rs1 == rs2 then
+      PC = PC + (sign_extend(XWORD, imm) << 1);
+    endif;
+  }
+
+op bne(rs1: X, rs2: X, imm: BRANCH_OFFSET)
+  syntax = format("bne %s, %s, %s", rs1.syntax, rs2.syntax, imm.syntax)
+  image  = format("%32s", branch_image(rs1, rs2, imm, 0b001).image)
+  action = {
+    if rs1 != rs2 then
+      PC = PC + (sign_extend(XWORD, imm) << 1);
+    endif;
+  }
+
+/*
+  BLT: Branch Less Than (SB-type)
+  BLTU: Branch Less Than Unsigned (SB-type)
+
+  Format: blt rs1, rs2, imm
+          bltu rs1, rs2, imm
+
+  All branch instructions use the SB-type instruction format. The 12-bit B-immediate
+  encodes signed offsets in multiples of 2, and is added to the current pc to give the
+  target address. The conditional branch range is +/- 4 KiB. Branch instructions compare
+  two registers.
+
+  BLT and BLTU take the branch if rs1 is less than rs2, using signed and unsigned
+  comparison respectively.
+*/
+op blt(rs1: X, rs2: X, imm: BRANCH_OFFSET)
+  syntax = format("blt %s, %s, %s", rs1.syntax, rs2.syntax, imm.syntax)
+  image  = format("%32s", branch_image(rs1, rs2, imm, 0b100).image)
+  action = {
+    if cast(XINT, rs1) < cast(XINT, rs2) then
+      PC = PC + (sign_extend(XWORD, imm) << 1);
+    endif;
+  }
+
+op bltu(rs1: X, rs2: X, imm: BRANCH_OFFSET)
+  syntax = format("bltu %s, %s, %s", rs1.syntax, rs2.syntax, imm.syntax)
+  image  = format("%32s", branch_image(rs1, rs2, imm, 0b110).image)
+  action = {
+    if rs1 < rs2 then
+      PC = PC + (sign_extend(XWORD, imm) << 1);
+    endif;
+  }
+
+/*
+  BGE: Branch Greater Equal (SB-type)
+  BGEU: Branch Greater Equal Unsigned (SB-type)
+
+  Format: bge rs1, rs2, imm
+          bgeu rs1, rs2, imm
+
+  All branch instructions use the SB-type instruction format. The 12-bit B-immediate
+  encodes signed offsets in multiples of 2, and is added to the current pc to give the
+  target address. The conditional branch range is +/- 4 KiB. Branch instructions compare
+  two registers.
+
+  BGE and BGEU take the branch if rs1 is greater than or equal to rs2, using signed
+  and unsigned comparison respectively.
+*/
+op bge(rs1: X, rs2: X, imm: BRANCH_OFFSET)
+  syntax = format("bge %s, %s, %s", rs1.syntax, rs2.syntax, imm.syntax)
+  image  = format("%32s", branch_image(rs1, rs2, imm, 0b101).image)
+  action = {
+    if cast(XINT, rs1) >= cast(XINT, rs2) then
+      PC = PC + (sign_extend(XWORD, imm) << 1);
+    endif;
+  }
+
+op bgeu(rs1: X, rs2: X, imm: BRANCH_OFFSET)
+  syntax = format("bgeu %s, %s, %s", rs1.syntax, rs2.syntax, imm.syntax)
+  image  = format("%32s", branch_image(rs1, rs2, imm, 0b111).image)
+  action = {
+    if rs1 >= rs2 then
+      PC = PC + (sign_extend(XWORD, imm) << 1);
+    endif;
+  }
+
+/*
+  LW:  Load Word (I-type)
+  LH:  Load Half (I-type)
+  LHU: Load Half Unsigned (I-type)
+  LB:  Load Byte (I-type)
+  LBU: Load Half Unsigned (I-type)
+
+  Format: lw  rd, rs1, imm
+  Format: lh  rd, rs1, imm
+  Format: lhu rd, rs1, imm
+  Format: lb  rd, rs1, imm
+  Format: lbu rd, rs1, imm
+
+  LW loads a 32-bit value from memory into rd.
+  LH loads a 16-bit value from memory, then sign-extends to 32-bits before storing in rd.
+  LHU loads a 16-bit value from memory but then zero extends to 32-bits before storing in rd.
+  LB and LBU are deﬁned analogously for 8-bit values.
+
+  Load instructions transfer a value between the registers and memory.
+  Loads are encoded in the I-type format. The effective byte address is obtained by adding
+  register rs1 to the sign-extended 12-bit offset. Loads copy a value from memory to
+  register rd.
+
+  For best performance, the effective address for all loads and stores should be
+  naturally aligned for each data type (i.e., on a four-byte boundary for 32-bit accesses,
+  and a two-byte boundary for 16-bit accesses). The base ISA supports misaligned accesses,
+  but these might run extremely slowly depending on the implementation. Furthermore,
+  naturally aligned loads and stores are guaranteed to execute atomically, whereas misaligned
+  loads and stores might not, and hence require additional synchronization to ensure atomicity.
+*/
+op lw(rd: X, rs1: X, imm: int(12))
+  syntax = format("lw %s, %d(%s)", rd.syntax, imm, rs1.syntax)
+  image  = format("%12s%s010%s0000011", imm, rs1.image, rd.image)
+  action = {
+    trace("op lw");
+    tmp_address = rs1 + sign_extend(XWORD, imm);
+    load_rvi(tmp_address, rd, MEM_WORD, SIGN_EXTEND_VALUE).action;
+  }
+
+op lh(rd: X, rs1: X, imm: int(12))
+  syntax = format("lh %s, %d(%s)", rd.syntax, imm, rs1.syntax)
+  image  = format("%12s%5s001%5s0000011", imm, rs1.image, rd.image)
+  action = {
+    tmp_address = rs1 + sign_extend(XWORD, imm);
+    load_rvi(tmp_address, rd, MEM_HWORD, SIGN_EXTEND_VALUE).action;
+  }
+
+op lhu(rd: X, rs1: X, imm: int(12))
+  syntax = format("lhu %s, %d(%s)", rd.syntax, imm, rs1.syntax)
+  image  = format("%12s%s101%s0000011", imm, rs1.image, rd.image)
+  action = {
+    tmp_address = rs1 + sign_extend(XWORD, imm);
+    load_rvi(tmp_address, rd, MEM_HWORD, ZERO_EXTEND_VALUE).action;
+  }
+
+op lb(rd: X, rs1: X, imm: int(12))
+  syntax = format("lb %s, %d(%s)", rd.syntax, imm, rs1.syntax)
+  image  = format("%12s%s000%s0000011", imm, rs1.image, rd.image)
+  action = {
+    tmp_address = rs1 + sign_extend(XWORD, imm);
+    load_rvi(tmp_address, rd, MEM_BYTE, SIGN_EXTEND_VALUE).action;
+  }
+
+op lbu(rd: X, rs1: X, imm: int(12))
+  syntax = format("lbu %s, %d(%s)", rd.syntax, imm, rs1.syntax)
+  image  = format("%12s%s100%s0000011", imm, rs1.image, rd.image)
+  action = {
+    tmp_address = rs1 + sign_extend(XWORD, imm);
+    load_rvi(tmp_address, rd, MEM_BYTE, ZERO_EXTEND_VALUE).action;
+  }
+
+/*
+  SW: Store Word (S-type)
+  SH: Store Half (S-type)
+  SB: Store Byte (S-type)
+
+  Format: sw rs1, rs2, imm
+  Format: sh rs1, rs2, imm
+  Format: sb rs1, rs2, imm
+
+  The SW, SH, and SB instructions store 32-bit, 16-bit, and 8-bit values from
+  the low bits of register rs2 to memory.
+*/
+
+op sw(rs2: X, rs1: X, imm: int(12))
+  syntax = format("sw %s, %d(%s)", rs2.syntax, imm, rs1.syntax)
+  image  = format("%7s%s%s010%5s0100011", imm<11..5>, rs2.image, rs1.image, imm<4..0>)
+  action = {
+    tmp_address = rs1 + sign_extend(XWORD, imm);
+    store_rvi(tmp_address, rs2, MEM_WORD).action;
+  }
+
+op sh(rs2: X, rs1: X, imm: int(12))
+  syntax = format("sh %s, %d(%s)", rs2.syntax, imm, rs1.syntax)
+  image  = format("%7s%s%s001%5s0100011", imm<11..5>, rs2.image, rs1.image, imm<4..0>)
+  action = {
+    tmp_address = rs1 + sign_extend(XWORD, imm);
+    store_rvi(tmp_address, rs2, MEM_HWORD).action;
+  }
+
+op sb(rs2: X, rs1: X, imm: int(12))
+  syntax = format("sb %s, %d(%s)", rs2.syntax, imm, rs1.syntax)
+  image  = format("%7s%5s%5s000%5s0100011", imm<11..5>, rs2.image, rs1.image, imm<4..0>)
+  action = {
+    tmp_address = rs1 + sign_extend(XWORD, imm);
+    store_rvi(tmp_address, rs2, MEM_BYTE).action;
+  }
+
+op rv32i_mmu = lb
+             | lh
+             | lw
+             | lbu
+             | lhu
+             | sb
+             | sh
+             | sw
+
+/*
+  ADDI: Add Immediate (I-type)
+
+  Format: addi rd, rs1, imm
+
+  ADDI adds the sign-extended 12-bit immediate to register rs1. Arithmetic overﬂow is
+  ignored and the result is simply the low XLEN bits of the result. ADDI rd, rs1, 0
+  is used to implement the MV rd, rs1 assembler pseudo-instruction.
+*/
+op addi(rd: X, rs1: X, imm: int(12))
+  syntax = format("addi %s, %s, %d", rd.syntax, rs1.syntax, imm)
+  image  = format("%12s%5s000%5s0010011", imm, rs1.image, rd.image)
+  action = {
+    rd = rs1 + sign_extend(XWORD, imm);
+  }
+
+/*
+  SLTI: Set Less Than Immediate (I-type)
+
+  Format: slti rd, rs1, imm
+
+  SLTI (set less than immediate) places the value 1 in register rd if register rs1 is
+  less than the sign-extended immediate when both are treated as signed numbers,
+  else 0 is written to rd.
+*/
+op slti(rd: X, rs1: X, imm: int(12))
+  syntax = format("slti %s, %s, %d", rd.syntax, rs1.syntax, imm)
+  image  = format("%12s%s010%s0010011", imm, rs1.image, rd.image)
+  action = {
+    if cast(XINT, rs1) < sign_extend(XINT, imm) then
+      rd = 1;
+    else
+      rd = 0;
+    endif;
+  }
+
+/*
+  SLTIU: Set Less Than Immediate Unsigned (I-type)
+
+  Format: sltiu rd, rs1, imm
+
+  SLTIU is similar to SLTI but compares the values as unsigned numbers (i.e.,
+  the immediate is first sign-extended to XLEN bits then treated as an unsigned number).
+  Note, SLTIU rd, rs1, 1 sets rd to 1 if rs1 equals zero, otherwise sets rd to 0
+  (assembler pseudo-op SEQZ rd, rs).
+*/
+op sltiu(rd: X, rs1: X, imm: int(12))
+  syntax = format("sltiu %s, %s, %d", rd.syntax, rs1.syntax, imm)
+  image  = format("%12s%s011%s0010011", imm, rs1.image, rd.image)
+  action = {
+    if rs1 < sign_extend(XWORD, imm) then
+      rd = 1;
+    else
+      rd = 0;
+    endif;
+  }
+
+/*
+  XORI: XOR Immediate (I-type)
+
+  Format: xori rd, rs1, imm
+
+  XORI is a logical operation that performs bitwise XOR on register rs1 and
+  the sign-extended 12-bit immediate and place the result in rd.
+  Note, XORI rd, rs1, -1 performs a bitwise logical inversion of register rs1
+  (assembler pseudo-instruction NOT rd, rs).
+*/
+op xori(rd: X, rs1: X, imm: int(12))
+  syntax = format("xori %s, %s, %d", rd.syntax, rs1.syntax, imm)
+  image  = format("%12s%s100%s0010011", imm, rs1.image, rd.image)
+  action = {
+    rd = rs1 ^ sign_extend(XWORD, imm);
+  }
+
+/*
+  ORI: OR Immediate (I-type)
+
+  Format: ori rd, rs1, imm
+
+  ORI is a logical operation that performs bitwise OR on register rs1
+  and the sign-extended 12-bit immediate and place the result in rd.
+*/
+op ori(rd: X, rs1: X, imm: int(12))
+  syntax = format("ori %s, %s, %d", rd.syntax, rs1.syntax, imm) // TODO 0x%x
+  image  = format("%12s%s110%s0010011", imm, rs1.image, rd.image)
+  action = {
+    rd = rs1 | sign_extend(XWORD, imm);
+  }
+
+/*
+  ANDI: AND Immediate (I-type)
+
+  Format: andi rd, rs1, imm
+
+  ANDI is a logical operation that performs bitwise AND on register rs1
+  and the sign-extended 12-bit immediate and place the result in rd.
+*/
+op andi(rd: X, rs1: X, imm: int(12))
+  syntax = format("andi %s, %s, %d", rd.syntax, rs1.syntax, imm)
+  image  = format("%12s%s111%s0010011", imm, rs1.image, rd.image)
+  action = {
+    rd = rs1 & sign_extend(XWORD, imm);
+  }
+
+/*
+  SLLI: Shift Left Logical Immediate (I-type)
+  SRLI: Shift Right Logical Immediate (I-type)
+  SRAI: Shift Right Arithmetic Immediate (I-type)
+
+  Format: slli rd, rs1, imm
+  Format: srli rd, rs1, imm
+  Format: srai rd, rs1, imm
+
+  SLLI is a logical left shift (zeros are shifted into the lower bits).
+  SRLI is a logical right shift (zeros are shifted into the upper bits).
+  SRAI is an arithmetic right shift (the original sign bit is copied into the vacated upper bits).
+
+  RV32I:
+
+  Shifts by a constant are encoded as a specialization of the I-type format. The operand
+  to be shifted is in rs1, and the shift amount is encoded in the lower 5 bits (SHLEN = 5)
+  of the I-immediate ﬁeld. The right shift type is encoded in a high bit of the I-immediate.
+
+  RV64I:
+
+  Shifts by a constant are encoded as a specialization of the I-type format using the same
+  instruction opcode as RV32I. The operand to be shifted is in rs1, and the shift amount
+  is encoded in the lower 6 bits (SHLEN = 6) of the I-immediate ﬁeld for RV64I. The right
+  shift type is  encoded in bit 30. For RV32I, SLLI, SRLI, and SRAI generate an illegal
+  instruction exception if imm[5] = 0.
+*/
+op slli(rd: X, rs1: X, imm: card(SHLEN))
+  syntax = format("slli %s, %s, 0x%x", rd.syntax, rs1.syntax, imm)
+#ifdef RV64I
+    image = format("000000%1s%5s%s001%s0010011", imm<5>, imm<4..0>, rs1.image, rd.image)
+#else
+    image = format("000000%1s%5s%s001%s0010011", coerce(BIT, 0), imm<4..0>, rs1.image, rd.image)
+#endif
+  action = {
+    rd = rs1 << imm;
+  }
+
+op srli(rd: X, rs1: X, imm: card(SHLEN))
+  syntax = format("srli %s, %s, 0x%x", rd.syntax, rs1.syntax, imm)
+#ifdef RV64I
+    image = format("000000%1s%5s%s101%s0010011", imm<5>, imm<4..0>, rs1.image, rd.image)
+#else
+    image = format("000000%1s%5s%s101%s0010011", coerce(BIT, 0), imm<4..0>, rs1.image, rd.image)
+#endif
+  action = {
+    rd = rs1 >> imm;
+  }
+
+op srai(rd: X, rs1: X, imm: card(SHLEN))
+  syntax = format("srai %s, %s, 0x%x", rd.syntax, rs1.syntax, imm)
+#ifdef RV64I
+    image = format("010000%1s%5s%s101%s0010011", imm<5>, imm<4..0>, rs1.image, rd.image)
+#else
+    image = format("010000%1s%5s%s101%s0010011", coerce(BIT, 0), imm<4..0>, rs1.image, rd.image)
+#endif
+  action = {
+    rd = cast(XINT, rs1) >> imm;
+  }
+
+/*
+  SLL: Shift Left Logical (R-type)
+  SRL: Shift Right Logical (R-type)
+  SRA: Shift Right Arithmetic (R-type)
+
+  Format: sll rd, rs1, rs2
+          srl rd, rs1, rs2
+          sra rd, rs1, rs2
+
+  SLL, SRL, and SRA perform logical left, logical right, and arithmetic right shifts on
+  the value in register rs1 by the shift amount held in register rs2.
+
+  RV32I: The shift amount is held in the lower 5 bits of register rs2 (SHLEN = 5).
+  RV64I: Only the low 6 bits of rs2 are considered for the shift amount (SHLEN = 6).
+*/
+op sll(rd: X, rs1: X, rs2: X)
+  syntax = format("sll %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000000%s%s001%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    rd = rs1 << rs2<SHLEN-1..0>;
+  }
+
+op srl(rd: X, rs1: X, rs2: X)
+  syntax = format("srl %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000000%s%s101%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    rd = rs1 >> rs2<SHLEN-1..0>;
+  }
+
+op sra(rd: X, rs1: X, rs2: X)
+  syntax = format("sra %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0100000%s%s101%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    rd = cast(XINT, rs1) >> rs2<SHLEN-1..0>;
+  }
+
+/*
+  ADD and SUB (R-type)
+
+  Format: add rd, rs1, rs2
+          sub rd, rs1, rs2
+
+  ADD and SUB perform addition and subtraction respectively. Overﬂows are ignored
+  and the low XLEN bits of results are written to the destination.
+*/
+op add(rd: X, rs1: X, rs2: X)
+  syntax = format("add %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000000%s%s000%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    rd = rs1 + rs2;
+  }
+
+op sub(rd: X, rs1: X, rs2: X)
+  syntax = format("sub %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0100000%s%s000%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    rd = rs1 - rs2;
+  }
+
+/*
+  SLT and SLTU: Set Less Than and Set Less Than Unsigned (R-type)
+
+  Format: slt rd, rs1, rs2
+          sltu rd, rs1, rs2
+
+  SLT and SLTU  perform signed and unsigned compares respectively, writing 1 to
+  rd if rs1 < rs2, 0 otherwise. Note, SLTU rd, x0, rs2 sets rd to 1 if rs2 is not
+  equal to zero, otherwise sets rd to zero (assembler pseudo-op SNEZ rd, rs).
+*/
+op slt(rd: X, rs1: X, rs2: X)
+  syntax = format("slt %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000000%s%s010%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    if cast(XINT, rs1) < cast(XINT, rs2) then
+      rd = 1;
+    else
+      rd = 0;
+    endif;
+  }
+
+op sltu(rd: X, rs1: X, rs2: X)
+  syntax = format("sltu %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000000%s%s011%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    if rs1 < rs2 then
+      rd = 1;
+    else
+      rd = 0;
+    endif;
+  }
+
+/*
+  AND, OR, and XOR (R-type)
+
+  Format: and rd, rs1, rs2
+          or rd, rs1, rs2
+          xor rd, rs1, rs2
+
+  AND, OR, and XOR perform bitwise logical operations.
+*/
+op and(rd: X, rs1: X, rs2: X)
+  syntax = format("and %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000000%s%s111%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    rd = rs1 & rs2;
+  }
+
+op or(rd: X, rs1: X, rs2: X)
+  syntax = format("or %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000000%s%s110%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    rd = rs1 | rs2;
+  }
+
+op xor(rd: X, rs1: X, rs2: X)
+  syntax = format("xor %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000000%s%s100%s0110011", rs2.image, rs1.image, rd.image)
+  action = {
+    rd = rs1 ^ rs2;
+  }
+
+//==================================================================================================
+// Pseudoinstructions
+//==================================================================================================
+
+/*
+  NOP: No operation (addi x0, x0, 0)
+
+  Format: nop
+
+  The NOP instruction does not change any user-visible state, except for advancing
+  the pc. NOP is encoded as ADDI x0, x0, 0.
+*/
+pseudo op nop()
+  syntax = "nop"
+  image  = format("%32s", addi(X(0), X(0), 0).image)
+  action = {}
+
+/*
+  MV: Copy register (addi rd, rs, 0)
+
+  Format: mv rd, rs
+*/
+pseudo op mv(rd: X, rs: X)
+  syntax = format("mv %s, %s", rd.syntax, rs.syntax)
+  image  = format("%s", addi(rs, rd, 0).image)
+  action = {
+    addi(rd, rs, 0).action;
+  }
+
+/*
+  NOT: One's complement (xori rd, rs, -1)
+
+  Format: not rd, rs
+*/
+pseudo op not(rd: X, rs: X)
+  syntax = format("not %s, %s", rd.syntax, rs.syntax)
+  image  = format("%s", xori(rd, rs, -1).image)
+  action = {
+    xori(rd, rs, -1).action;
+  }
+
+/*
+  NEG: Two's complement (sub rd, x0, rs)
+
+  Format: neg rd, rs
+*/
+pseudo op neg(rd: X, rs: X)
+  syntax = format("neg %s, %s", rd.syntax, rs.syntax)
+  image  = format("%s", sub(rd, X(0), rs).image)
+  action = {
+    sub(rd, X(0), rs).action;
+  }
+
+/*
+  SEQZ: Set if = zero (sltiu rd, rs, 1)
+
+  Format: seqz rd, rs
+*/
+pseudo op seqz(rd: X, rs: X)
+  syntax = format("seqz %s, %s", rd.syntax, rs.syntax)
+  image  = format("%s", sltiu(rd, rs, 1).image)
+  action = {
+    sltiu(rd, rs, 1).action;
+  }
+
+/*
+  SNEZ: Set if != zero (sltu rd, x0, rs)
+
+  Format: snez rd, rs
+*/
+pseudo op snez(rd: X, rs: X)
+  syntax = format("snez %s, %s", rd.syntax, rs.syntax)
+  image  = format("%s", sltu(rd, X(0), rs).image)
+  action = {
+    sltu(rd, X(0), rs).action;
+  }
+
+/*
+  SLTZ: Set if < zero (slt rd, rs, x0)
+
+  Format: sltz rd, rs
+*/
+pseudo op sltz(rd: X, rs: X)
+  syntax = format("sltz %s, %s", rd.syntax, rs.syntax)
+  image  = format("%s", slt(rd, rs, X(0)).image)
+  action = {
+    slt(rd, rs, X(0)).action;
+  }
+
+/*
+  SGTZ: Set if > zero (slt rd, x0, rs)
+
+  Format: sgtz rd, rs
+*/
+pseudo op sgtz(rd: X, rs: X)
+  syntax = format("sgtz %s, %s", rd.syntax, rs.syntax)
+  image  = format("%s", slt(rd, X(0), rs).image)
+  action = {
+    slt(rd, X(0), rs).action;
+  }
+
+/*
+  J: Jump (jal x0, offset)
+
+  Format: j offset
+*/
+pseudo op j(offset: JUMP_ADDR_JAL)
+  syntax = format("j %s", offset.syntax)
+  image  = format("%s", jal(X(0), offset).image)
+  action = {
+    jal(X(0), offset).action;
+  }
+
+/*
+  JR: Jump Register (jalr x0, rs, 0)
+
+  Format: jr rs
+*/
+pseudo op jr(rs: X)
+  syntax = format("jr %s", rs.syntax)
+  image  = format("%s", jalr(X(0), rs, 0).image)
+  action = {
+    jalr(X(0), rs, 0).action;
+  }
+
+/*
+  BEQZ: Branch if = zero (beq rs, x0, offset).
+
+  Format: beqz rs, offset
+*/
+pseudo op beqz(rs: X, offset: BRANCH_OFFSET)
+  syntax = format("beqz %s, %s", rs.syntax, offset.syntax)
+  image  = format("%s", beq(rs, X(0), offset).image)
+  action = {
+    beq(rs, X(0), offset).action;
+  }
+
+/*
+  BNEZ: Branch if != zero (bne rs, x0, offset).
+
+  Format: bnez rs, offset
+*/
+pseudo op bnez(rs: X, offset: BRANCH_OFFSET)
+  syntax = format("bnez %s, %s", rs.syntax, offset.syntax)
+  image  = format("%s", bne(rs, X(0), offset).image)
+  action = {
+    bne(rs, X(0), offset).action;
+  }
+
+/*
+  BLEZ: Branch if <= zero (bge x0, rs, offset).
+
+  Format: blez rs, offset
+*/
+pseudo op blez(rs: X, offset: BRANCH_OFFSET)
+  syntax = format("blez %s, %s", rs.syntax, offset.syntax)
+  image  = format("%s", bge(X(0), rs, offset).image)
+  action = {
+    bge(X(0), rs, offset).action;
+  }
+
+/*
+  BGEZ: Branch if >= zero (bge rs, x0, offset).
+
+  Format: bgez rs, offset
+*/
+pseudo op bgez(rs: X, offset: BRANCH_OFFSET)
+  syntax = format("bgez %s, %s", rs.syntax, offset.syntax)
+  image  = format("%s", bge(rs, X(0), offset).image)
+  action = {
+    bge(rs, X(0), offset).action;
+  }
+
+/*
+  BLTZ: Branch if < zero (blt rs, x0, offset).
+
+  Format: bltz rs, offset
+*/
+pseudo op bltz(rs: X, offset: BRANCH_OFFSET)
+  syntax = format("bltz %s, %s", rs.syntax, offset.syntax)
+  image  = format("%s", blt(rs, X(0), offset).image)
+  action = {
+    blt(rs, X(0), offset).action;
+  }
+
+/*
+  BGTZ: Branch if > zero (blt x0, rs, offset).
+
+  Format: bgtz rs, offset
+*/
+pseudo op bgtz(rs: X, offset: BRANCH_OFFSET)
+  syntax = format("bgtz %s, %s", rs.syntax, offset.syntax)
+  image  = format("%s", blt(X(0), rs, offset).image)
+  action = {
+    blt(X(0), rs, offset).action;
+  }
+
+//==================================================================================================
+// Instruction Groups
+//==================================================================================================
+
+op rv32i = lui
+         | auipc
+         | jal
+         | jalr
+         | beq
+         | bne
+         | blt
+         | bge
+         | bltu
+         | bgeu
+         | addi
+         | slti
+         | sltiu
+         | xori
+         | ori
+         | andi
+         | slli
+         | srli
+         | srai
+         | sll
+         | srl
+         | sra
+         | add
+         | sub
+         | slt
+         | sltu
+         | xor
+         | or
+         | and // 29
+         | rv32i_mmu // 8
+
+         // Pseudoinstructions
+         | nop
+         | mv
+         | not
+         | neg
+         | seqz
+         | snez
+         | sltz
+         | sgtz
+         | j
+         | jr
+         | beqz
+         | bnez
+         | blez
+         | bgez
+         | bltz
+         | bgtz // 16
+
+//==================================================================================================
+// Special for templates
+//==================================================================================================
+
+op rv32i_load_upper_imm = lui
+                        | auipc
+
+op rv32i_arithmetic_rrr = add
+                        | sub
+                        | xor
+                        | or
+                        | and
+
+op rv32i_arithmetic_rri = xori
+                        | ori
+                        | andi
+
+//==================================================================================================
+// The End
+//==================================================================================================
+
+#endif

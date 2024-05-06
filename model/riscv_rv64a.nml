@@ -1,0 +1,199 @@
+/*
+ * Copyright 2017-2019 ISP RAS (http://www.ispras.ru)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+#ifndef RISCV_RV64A_INCLUDED
+#define RISCV_RV64A_INCLUDED
+
+//==================================================================================================
+// RV64A Standard Extension
+//==================================================================================================
+
+/*  LR.D +
+    SC.D +
+
+  The atomic memory operation (AMO) instructions perform read-modify-write operations for
+  multiprocessor synchronization and are encoded with an R-type instruction format.
+    AMOSWAP.D +
+    AMOADD.D +
+    AMOXOR.D +
+    AMOAND.D +
+    AMOOR.D +
+    AMOMIN.D +
+    AMOMAX.D +
+    AMOMINU.D +
+    AMOMAXU.D + */
+
+op lr_d(rd: X, rs1: X)
+  syntax = format("lr.d %s, (%s)", rd.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "00010", "0", "0", "00000", rs1.image, "011", rd.image)
+  action = {
+    // TODO: This is a simplified specification that replicates how it is implemented in Spike.
+    LOAD_RESERVATION = rs1;
+    load_data(MEM_DWORD, rs1).action; // return load_value
+    rd = load_value;
+  }
+
+// SC writes a word in rs2 to the address in rs1, provided a valid reservation still exists on that address.
+op sc_d(rd: X, rs2: X, rs1: X)
+  syntax = format("sc.d %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "00011", "0", "0", rs2.image, rs1.image, "011", rd.image)
+  action = {
+    // TODO: This is a simplified specification that replicates how it is implemented in Spike.
+    if rs1 == LOAD_RESERVATION then
+      store_data(MEM_DWORD, rs1, coerce(DWORD, rs2)).action;
+      rd = 0;
+    else
+      rd = 1;
+    endif;
+  }
+
+op amoswap_d(rd: X, rs2: X, rs1: X)
+  syntax = format("amoswap.d %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "00001", "0", "0", rs2.image, rs1.image, "011", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_DWORD, tmp_address).action; // return load_value
+    rd = load_value;
+    store_data(MEM_DWORD, tmp_address, coerce(DWORD, rs2)).action;
+  }
+
+op amoadd_d(rd: X, rs2: X, rs1: X)
+  syntax = format("amoadd.d %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "00000", "0", "0", rs2.image, rs1.image, "011", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_DWORD, tmp_address).action; // return load_value
+    rd = load_value;
+    tmp_dword = rd + rs2;
+    store_data(MEM_DWORD, tmp_address, coerce(DWORD, tmp_dword)).action;
+  }
+
+op amoand_d(rd: X, rs2: X, rs1: X)
+  syntax = format("amoand.d %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "01100", "0", "0", rs2.image, rs1.image, "011", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_DWORD, tmp_address).action; // return load_value
+    rd = load_value;
+    tmp_dword = rd & rs2;
+    store_data(MEM_DWORD, tmp_address, coerce(DWORD, tmp_dword)).action;
+  }
+
+op amoor_d(rd: X, rs2: X, rs1: X)
+  syntax = format("amoor.d %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "01000", "0", "0", rs2.image, rs1.image, "011", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_DWORD, tmp_address).action; // return load_value
+    rd = load_value;
+    tmp_dword = rd | rs2;
+    store_data(MEM_DWORD, tmp_address, coerce(DWORD, tmp_dword)).action;
+  }
+
+op amoxor_d(rd: X, rs2: X, rs1: X)
+  syntax = format("amoxor.d %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "00100", "0", "0", rs2.image, rs1.image, "011", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_DWORD, tmp_address).action; // return load_value
+    rd = load_value;
+    tmp_dword = rd ^ rs2;
+    store_data(MEM_DWORD, tmp_address, coerce(DWORD, tmp_dword)).action;
+  }
+
+op amomin_d(rd: X, rs2: X, rs1: X)
+  syntax = format("amomin.d %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "10000", "0", "0", rs2.image, rs1.image, "011", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_DWORD, tmp_address).action; // return load_value
+    rd = load_value;
+    tmp_long1 = coerce(LONG, rd);
+    tmp_long2 = coerce(LONG, rs2);
+    if tmp_long1 < tmp_long2 then
+      tmp_dword = rd;
+    else
+      tmp_dword = rs2;
+    endif;
+    store_data(MEM_DWORD, tmp_address, coerce(DWORD, tmp_dword)).action;
+  }
+
+op amomax_d(rd: X, rs2: X, rs1: X)
+  syntax = format("amomax.d %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "10100", "0", "0", rs2.image, rs1.image, "011", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_DWORD, tmp_address).action; // return load_value
+    rd = load_value;
+    tmp_long1 = coerce(LONG, rd);
+    tmp_long2 = coerce(LONG, rs2);
+    if tmp_long1 > tmp_long2 then
+      tmp_dword = rd;
+    else
+      tmp_dword = rs2;
+    endif;
+    store_data(MEM_DWORD, tmp_address, coerce(DWORD, tmp_dword)).action;
+  }
+
+op amominu_d(rd: X, rs2: X, rs1: X)
+  syntax = format("amominu.d %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "11000", "0", "0", rs2.image, rs1.image, "011", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_DWORD, tmp_address).action; // return load_value
+    rd = load_value;
+    if rd < rs2 then
+      tmp_dword = rd;
+    else
+      tmp_dword = rs2;
+    endif;
+    store_data(MEM_DWORD, tmp_address, coerce(DWORD, tmp_dword)).action;
+  }
+
+op amomaxu_d(rd: X, rs2: X, rs1: X)
+  syntax = format("amomaxu.d %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "11100", "0", "0", rs2.image, rs1.image, "011", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_DWORD, tmp_address).action; // return load_value
+    rd = load_value;
+    tmp_long1 = coerce(LONG, rd);
+    tmp_long2 = coerce(LONG, rs2);
+    if rd > rs2 then
+      tmp_dword = rd;
+    else
+      tmp_dword = rs2;
+    endif;
+    store_data(MEM_DWORD, tmp_address, coerce(DWORD, tmp_dword)).action;
+  }
+
+//==================================================================================================
+
+op rv64a = lr_d
+         | sc_d
+         | amoswap_d
+         | amoadd_d
+         | amoand_d
+         | amoor_d
+         | amoxor_d
+         | amomin_d
+         | amomax_d
+         | amominu_d
+         | amomaxu_d
+
+//==================================================================================================
+
+#endif

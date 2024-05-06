@@ -1,0 +1,438 @@
+/*
+ * Copyright 2017-2020 ISP RAS (http://www.ispras.ru)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+#ifndef RISCV_PSEUDO_INCLUDED
+#define RISCV_PSEUDO_INCLUDED
+
+//==================================================================================================
+// Pseudo instructions
+//==================================================================================================
+
+// Temporary variable for caching delta. Needed to avoid the following limitation:
+// return expression of modes cannot be evaluated inside of the 'image' attribute.
+var tmp_delta[card(32)]
+
+label mode DELTA_LABEL(target: XWORD, current: XWORD) = target<31..0> - current<31..0>
+  init = {
+    tmp_delta = target<31..0> - current<31..0>;
+  }
+  syntax = ""
+  image = format("%s", tmp_delta)
+
+mode DELTA_IMM(imm: card(32)) = imm
+  init = {
+    tmp_delta = imm;
+  }
+  syntax = format("0x%x", imm)
+  image = format("%s", imm)
+
+mode DELTA = DELTA_LABEL | DELTA_IMM
+
+/*
+  LA: Load address
+
+  Format: la rd, symbol
+  Note: delta = symbol − pc
+*/
+pseudo op la(rd: X, delta: DELTA)
+  init   = { delta.init; }
+  syntax = format("la %s, %s", rd.syntax, delta.syntax)
+  image  = format("%s%s", auipc(rd, tmp_delta<31..12> + zero_extend(card(20), tmp_delta<11>)).image,
+                          addi(rd, rd, cast(int(12), tmp_delta<11..0>)).image)
+  action = {
+    instruction(auipc(rd, delta<31..12> + zero_extend(card(20), delta<11>))).action;
+    instruction(addi(rd, rd, cast(int(12), delta<11..0>))).action;
+  }
+
+/*
+  LLA: Load label address
+
+  Format: lla rd, symbol + imm
+  Note: delta = symbol − pc
+*/
+pseudo op lla(rd: X, delta: DELTA, imm: int(32))
+  init   = { delta.init; }
+  syntax = format("lla %s, %s%s%d", rd.syntax, delta.syntax, if imm >=0 then "+" else "" endif, imm)
+  image  = format("%s", la(rd, DELTA_IMM(tmp_delta + cast(card(32), imm))).image)
+  action = {
+    la(rd, DELTA_IMM(delta + cast(card(32), imm))).action;
+  }
+
+/*
+  LB: Load global (byte)
+
+  Format: lb rd, symbol
+  Note: delta = symbol − pc
+*/
+pseudo op lb_global(rd: X, delta: DELTA)
+  init   = { delta.init; }
+  syntax = format("lb %s, %s", rd.syntax, delta.syntax)
+  image  = format("%s%s", auipc(rd, tmp_delta<31..12> + zero_extend(card(20), tmp_delta<11>)).image,
+                          lb(rd, rd, cast(int(12), tmp_delta<11..0>)).image)
+  action = {
+    instruction(auipc(rd, delta<31..12> + zero_extend(card(20), delta<11>))).action;
+    instruction(lb(rd, rd, cast(int(12), delta<11..0>))).action;
+  }
+
+/*
+  LH: Load global (half)
+
+  Format: lh rd, symbol
+  Note: delta = symbol − pc
+*/
+pseudo op lh_global(rd: X, delta: DELTA)
+  init   = { delta.init; }
+  syntax = format("lh %s, %s", rd.syntax, delta.syntax)
+  image  = format("%s%s", auipc(rd, tmp_delta<31..12> + zero_extend(card(20), tmp_delta<11>)).image,
+                          lh(rd, rd, cast(int(12), tmp_delta<11..0>)).image)
+  action = {
+    instruction(auipc(rd, delta<31..12> + zero_extend(card(20), delta<11>))).action;
+    instruction(lh(rd, rd, cast(int(12), delta<11..0>))).action;
+  }
+
+/*
+  LH: Load global + immediate (half)
+
+  Format: lh rd, symbol + imm
+  Note: delta = symbol − pc
+*/
+pseudo op lh_global2(rd: X, delta: DELTA, imm: int(32))
+  init   = {
+    delta.init;
+    tmp_word = tmp_delta + cast(card(32), imm);
+  }
+  syntax = format("lh %s, %s%s%d",
+                  rd.syntax, delta.syntax, if imm < 0 then "" else "+" endif, imm)
+  image  = format("%s%s", auipc(rd, tmp_word<31..12> + zero_extend(card(20), tmp_word<11>)).image,
+                          lh(rd, rd, cast(int(12), tmp_word<11..0>)).image)
+  action = {
+    instruction(auipc(rd, tmp_word<31..12> + zero_extend(card(20), tmp_word<11>))).action;
+    instruction(lh(rd, rd, cast(int(12), tmp_word<11..0>))).action;
+  }
+
+/*
+  LW: Load global (word)
+
+  Format: lw rd, symbol
+  Note: delta = symbol − pc
+*/
+pseudo op lw_global(rd: X, delta: DELTA)
+  init   = { delta.init; }
+  syntax = format("lw %s, %s", rd.syntax, delta.syntax)
+  image  = format("%s%s", auipc(rd, tmp_delta<31..12> + zero_extend(card(20), tmp_delta<11>)).image,
+                          lw(rd, rd, cast(int(12), tmp_delta<11..0>)).image)
+  action = {
+    instruction(auipc(rd, delta<31..12> + zero_extend(card(20), delta<11>))).action;
+    instruction(lw(rd, rd, cast(int(12), delta<11..0>))).action;
+  }
+
+/*
+  LD: Load global (double word)
+
+  Format: ld rd, symbol
+  Note: delta = symbol − pc
+*/
+@rev(RV64I)
+pseudo op ld_global(rd: X, delta: DELTA)
+  init   = { delta.init; }
+  syntax = format("ld %s, %s", rd.syntax, delta.syntax)
+  image  = format("%s%s", auipc(rd, tmp_delta<31..12> + zero_extend(card(20), tmp_delta<11>)).image,
+                          ld(rd, rd, cast(int(12), tmp_delta<11..0>)).image)
+  action = {
+    instruction(auipc(rd, delta<31..12> + zero_extend(card(20), delta<11>))).action;
+    instruction(ld(rd, rd, cast(int(12), delta<11..0>))).action;
+  }
+
+/*
+  SB: Store global (byte)
+
+  Format: sb rd, symbol, rt
+  Note: delta = symbol − pc
+*/
+pseudo op sb_global(rd: X, delta: DELTA, rt: X)
+  init   = { delta.init; }
+  syntax = format("sb %s, %s, %s", rd.syntax, delta.syntax, rt.syntax)
+  image  = format("%s%s", auipc(rd, tmp_delta<31..12> + zero_extend(card(20), tmp_delta<11>)).image,
+                          sb(rd, rt, cast(int(12), tmp_delta<11..0>)).image)
+  action = {
+    instruction(auipc(rt, delta<31..12> + zero_extend(card(20), delta<11>))).action;
+    instruction(sb(rd, rt, cast(int(12), delta<11..0>))).action;
+  }
+
+/*
+  SH: Store global (half)
+
+  Format: sh rd, symbol, rt
+  Note: delta = symbol − pc
+*/
+pseudo op sh_global(rd: X, delta: DELTA, rt: X)
+  init   = { delta.init; }
+  syntax = format("sh %s, %s, %s", rd.syntax, delta.syntax, rt.syntax)
+  image  = format("%s%s", auipc(rt, tmp_delta<31..12> + zero_extend(card(20), tmp_delta<11>)).image,
+                          sh(rd, rt, cast(int(12), tmp_delta<11..0>)).image)
+  action = {
+    instruction(auipc(rt, delta<31..12> + zero_extend(card(20), delta<11>))).action;
+    instruction(sh(rd, rt, cast(int(12), delta<11..0>))).action;
+  }
+
+/*
+  SH: Store global + immediate (half)
+
+  Format: sh rd, symbol, rt
+  Note: delta = symbol − pc
+*/
+pseudo op sh_global2(rd: X, delta: DELTA, imm: int(32), rt: X)
+  init   = {
+    delta.init;
+    tmp_word = tmp_delta + cast(card(32), imm);
+  }
+  syntax = format("sh %s, %s%s%d, %s",
+                  rd.syntax, delta.syntax, if imm < 0 then "" else "+" endif, imm, rt.syntax)
+  image  = format("%s%s", auipc(rt, tmp_word<31..12> + zero_extend(card(20), tmp_word<11>)).image,
+                          sh(rd, rt, cast(int(12), tmp_word<11..0>)).image)
+  action = {
+    instruction(auipc(rt, tmp_word<31..12> + zero_extend(card(20), tmp_word<11>))).action;
+    instruction(sh(rd, rt, cast(int(12), tmp_word<11..0>))).action;
+  }
+
+/*
+  SW: Store global (word)
+
+  Format: sw rd, symbol, rt
+  Note: delta = symbol − pc
+*/
+pseudo op sw_global(rd: X, delta: DELTA, rt: X)
+  init   = { delta.init; }
+  syntax = format("sw %s, %s, %s", rd.syntax, delta.syntax, rt.syntax)
+  image  = format("%s%s", auipc(rt, tmp_delta<31..12> + zero_extend(card(20), tmp_delta<11>)).image,
+                          sw(rd, rt, cast(int(12), tmp_delta<11..0>)).image)
+  action = {
+    instruction(auipc(rt, delta<31..12> + zero_extend(card(20), delta<11>))).action;
+    instruction(sw(rd, rt, cast(int(12), delta<11..0>))).action;
+  }
+
+/*
+  SD: Store global (double word)
+
+  Format: sd rd, symbol, rt
+  Note: delta = symbol − pc
+*/
+@rev(RV64I)
+pseudo op sd_global(rd: X, delta: DELTA, rt: X)
+  init   = { delta.init; }
+  syntax = format("sd %s, %s, %s", rd.syntax, delta.syntax, rt.syntax)
+  image  = format("%s%s", auipc(rt, tmp_delta<31..12> + zero_extend(card(20), tmp_delta<11>)).image,
+                          sd(rd, rt, cast(int(12), tmp_delta<11..0>)).image)
+  action = {
+    instruction(auipc(rt, delta<31..12> + zero_extend(card(20), delta<11>))).action;
+    instruction(sd(rd, rt, cast(int(12), delta<11..0>))).action;
+  }
+
+/*
+  LI: Load immediate (word)
+
+  Format: li rd, immediate
+*/
+pseudo op li32(rd: X, imm: WORD)
+  syntax = format("li %s, 0x%x", rd.syntax, imm)
+  image = format(
+     "%s%s",
+     lui(rd, imm<31..12> + zero_extend(card(20), imm<11>)).image,
+     addi(rd, rd, cast(int(12), imm<11..0>)).image
+  )
+  action = {
+    instruction(lui(rd, imm<31..12> + zero_extend(card(20), imm<11>))).action;
+    instruction(addi(rd, rd, cast(int(12), imm<11..0>))).action;
+  }
+
+/*
+  LI: Load immediate (double word)
+
+  Format: li rd, immediate
+*/
+@rev(RV64I)
+pseudo op li64(rd: X, imm: DWORD)
+  syntax = format("li %s, 0x%x", rd.syntax, imm)
+  image = format(
+     "%s%s%s%s%s%s%s",
+     li32(rd, imm<63..32>).image,
+     slli(rd, rd, 11).image,
+     ori(rd, rd, coerce(int(12), imm<31..21>)).image,
+     slli(rd, rd, 11).image,
+     ori(rd, rd, coerce(int(12), imm<20..10>)).image,
+     slli(rd, rd, 10).image,
+     ori(rd, rd, coerce(int(12), imm<9..0>)).image
+  )
+  action = {
+    li32(rd, imm<63..32>).action;
+    instruction(slli(rd, rd, 11)).action;
+    instruction(ori(rd, rd, coerce(int(12), imm<31..21>))).action;
+    instruction(slli(rd, rd, 11)).action;
+    instruction(ori(rd, rd, coerce(int(12), imm<20..10>))).action;
+    instruction(slli(rd, rd, 10)).action;
+    instruction(ori(rd, rd, coerce(int(12), imm<9..0>))).action;
+  }
+
+/*
+  LI: Load immediate (type-dependent)
+
+  Format: li rd, immediate
+*/
+pseudo op li(rd : X, imm : XWORD)
+  syntax = format("li %s, 0x%x", rd.syntax, imm)
+  image  = format("%s",
+#ifdef RV64I
+    if imm<63..11> == 0 || imm<63..11> == -1 then
+      addi(rd, X(0), cast(int(12), imm<11..0>)).image
+    elif imm<63..31> == 0 && imm<11> == 0 || imm<63..31> == -1 then
+      li32(rd, imm<31..0>).image
+    else
+      li64(rd, imm).image
+    endif
+#else
+    li32(rd, imm).image
+#endif
+  )
+  action = {
+#ifdef RV64I
+    if imm<63..11> == 0 || imm<63..11> == -1 then
+      instruction(addi(rd, X(0), cast(int(12), imm<11..0>))).action;
+    elif imm<63..31> == 0 && imm<11> == 0 || imm<63..31> == -1 then
+      li32(rd, imm<31..0>).action;
+    else
+      li64(rd, imm).action;
+    endif;
+#else
+    li32(rd, imm).action;
+#endif
+  }
+
+/*
+  FLW: Floating-point load global (single precision)
+
+  Format: flw rd, symbol, rt
+  Note: delta = symbol − pc
+*/
+@rev(RV32F)
+pseudo op flw_global(rd: F, delta: DELTA, rt: X)
+  init   = { delta.init; }
+  syntax = format("flw %s, %s, %s", rd.syntax, delta.syntax, rt.syntax)
+  image  = format("%s%s", auipc(rt, tmp_delta<31..12> + zero_extend(card(20), tmp_delta<11>)).image,
+                          flw(rd, rt, cast(int(12), tmp_delta<11..0>)).image)
+  action = {
+    instruction(auipc(rt, delta<31..12> + zero_extend(card(20), delta<11>))).action;
+    instruction(flw(rd, rt, cast(int(12), delta<11..0>))).action;
+  }
+
+/*
+  FLD: Floating-point load global (double precision)
+
+  Format: fld rd, symbol, rt
+  Note: delta = symbol − pc
+*/
+@rev(RV32D)
+pseudo op fld_global(rd: F, delta: DELTA, rt: X)
+  init   = { delta.init; }
+  syntax = format("fld %s, %s, %s", rd.syntax, delta.syntax, rt.syntax)
+  image  = format("%s%s", auipc(rt, tmp_delta<31..12> + zero_extend(card(20), tmp_delta<11>)).image,
+                          fld(rd, rt, cast(int(12), tmp_delta<11..0>)).image)
+  action = {
+    instruction(auipc(rt, delta<31..12> + zero_extend(card(20), delta<11>))).action;
+    instruction(fld(rd, rt, cast(int(12), delta<11..0>))).action;
+  }
+
+/*
+  FSW: Floating-point store global (single precision)
+
+  Format: fsw rd, symbol, rt
+  Note: delta = symbol − pc
+*/
+@rev(RV32F)
+pseudo op fsw_global(rd: F, delta: DELTA, rt: X)
+  init   = { delta.init; }
+  syntax = format("fsw %s, %s, %s", rd.syntax, delta.syntax, rt.syntax)
+  image  = format("%s%s", auipc(rt, tmp_delta<31..12> + zero_extend(card(20), tmp_delta<11>)).image,
+                          fsw(rd, rt, cast(int(12), tmp_delta<11..0>)).image)
+  action = {
+    instruction(auipc(rt, delta<31..12> + zero_extend(card(20), delta<11>))).action;
+    instruction(fsw(rd, rt, cast(int(12), delta<11..0>))).action;
+  }
+
+/*
+  FSD: Floating-point store global (double precision)
+
+  Format: fsd rd, symbol, rt
+  Note: delta = symbol − pc
+*/
+@rev(RV32D)
+pseudo op fsd_global(rd: F, delta: DELTA, rt: X)
+  init   = { delta.init; }
+  syntax = format("fsd %s, %s, %s", rd.syntax, delta.syntax, rt.syntax)
+  image  = format("%s%s", auipc(rt, tmp_delta<31..12> + zero_extend(card(20), tmp_delta<11>)).image,
+                          fsd(rd, rt, cast(int(12), tmp_delta<11..0>)).image)
+  action = {
+    instruction(auipc(rt, delta<31..12> + zero_extend(card(20), delta<11>))).action;
+    instruction(fsd(rd, rt, cast(int(12), delta<11..0>))).action;
+  }
+
+/*
+  CALL: Call far-away subroutine
+
+  Format: call offset
+  Note: delta = symbol − pc
+*/
+pseudo op call(delta: DELTA)
+  init   = { delta.init; }
+  syntax = format("call %s", delta.syntax)
+  image  = format("%s%s", auipc(X(6), tmp_delta<31..12> + zero_extend(card(20), tmp_delta<11>)).image,
+                          jalr(X(1), X(6), cast(int(12), tmp_delta<11..0>)).image)
+  action = {
+    instruction(auipc(X(6), delta<31..12> + zero_extend(card(20), delta<11>))).action;
+    instruction(jalr(X(1), X(6), cast(int(12), delta<11..0>))).action;
+  }
+
+/*
+  TAIL: Tail call far-away subroutine
+
+  Format: tail offset
+  Note: delta = symbol − pc
+*/
+pseudo op tail(delta: DELTA)
+  init   = { delta.init; }
+  syntax = format("tail %s", delta.syntax)
+  image  = format("%s%s", auipc(X(6), tmp_delta<31..12> + zero_extend(card(20), tmp_delta<11>)).image,
+                          jalr(X(0), X(6), cast(int(12), tmp_delta<11..0>)).image)
+  action = {
+    instruction(auipc(X(6), delta<31..12> + zero_extend(card(20), delta<11>))).action;
+    instruction(jalr(X(0), X(6), cast(int(12), delta<11..0>))).action;
+  }
+
+/*
+  RET: Return from subroutine
+
+  Format: ret
+*/
+pseudo op ret()
+  init   = {}
+  syntax = format("ret")
+  image  = format("%s", jalr(X(0), X(1), 0).image)
+  action = {
+    instruction(jalr(X(0), X(1), cast(int(12), 0))).action;
+  }
+
+//==================================================================================================
+
+#endif

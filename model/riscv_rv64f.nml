@@ -1,0 +1,172 @@
+/*
+ * Copyright 2017-2019 ISP RAS (http://www.ispras.ru)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+#ifndef RISCV_RV64F_INCLUDED
+#define RISCV_RV64F_INCLUDED
+
+//==================================================================================================
+// RV64F Standard Extension (in addition to RV32F)
+//==================================================================================================
+
+/*
+  Instructions (number: 4):
+    FCVT.L.S
+    FCVT.LU.S
+    FCVT.S.L
+    FCVT.S.LU
+*/
+
+op fcvt_l_s(rd: X, rs1: F, op_round_mod: card(3))
+  syntax = format("fcvt.l.s %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1100000%5s%5s%3s%5s1010011", "00010", rs1.image, op_round_mod, rd.image)
+  action = {
+    //coerce(card(3), RM_RNE)
+    tmp_ui3 = float_rounding_mode;
+    setSFRoundingMode(op_round_mod).action;
+
+    rd = float_to_int(DWORD, cast(FLOAT32, rs1<31..0>));
+
+    float_rounding_mode = tmp_ui3; // return the original value
+
+    process_float_exception_flags().action;
+  }
+
+// TODO:
+op fcvt_l_s2(rd: X, rs1: F)
+  syntax = format("%s", fcvt_l_s(rd, rs1, coerce(card(3), RM_RTZ)).syntax)
+  image  = format("%32s", fcvt_l_s(rd, rs1, coerce(card(3), RM_RTZ)).image)
+  action = {
+    fcvt_l_s(rd, rs1, coerce(card(3), RM_RTZ)).action;
+  }
+
+op fcvt_lu_s(rd: X, rs1: F, op_round_mod: card(3))
+  syntax = format("fcvt.lu.s %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1100000%5s%5s%3s%5s1010011", "00011", rs1.image, op_round_mod, rd.image)
+  action = {
+    //coerce(card(3), RM_RNE)
+    tmp_ui3 = float_rounding_mode;
+    setSFRoundingMode(op_round_mod).action;
+
+    // Warning: very bad code below =)
+    temp_fps<31..0> = rs1<31..0>;
+    if rs1<31> == 1 then
+      // TODO: jSoftFloat
+      rd = 0;
+      if is_nan(temp_fps) then rd = -1;
+      else rd = 0; endif;
+    else
+      // TODO: jSoftFloat
+      exponent = rs1<30..23>;
+      precision = rs1<22..0>;
+
+      if is_nan(temp_fps) then rd = -1;
+      elif exponent == coerce(card(8), 0xff) && precision == 0 then rd = -1;
+      else
+        process_float_exception_flags().action; // Used to clean the flag
+        rd = float_to_int(DWORD, cast(FLOAT32, rs1<31..0>));
+        process_float_exception_flags().action;
+
+        // TODO: jSoftFloat
+        tmp_word = 0x7fffFFFF;
+        temp_fps = int_to_float(FLOAT32, tmp_word);
+        temp_fps2 = cast(FLOAT32, rs1<31..0>);
+        if temp_fps2 > temp_fps then
+          rd = float_to_int(DWORD, temp_fps2 - temp_fps);
+          rd<63> = 0b1;
+        endif;
+      endif;
+    endif;
+
+    float_rounding_mode = tmp_ui3; // return the original value
+
+    if rs1<31> == 1 then
+      // TODO: jSoftFloat
+      // Used to clean the flag:
+      float_exception_flags = 0;
+      process_float_exception_flags().action;
+
+      tmp_dword = float_to_int(DWORD, cast(FLOAT32, XREG[0]<1>::rs1<30..0>));
+      tmp_word = float_exception_flags;
+      if tmp_word == 0 then
+        FFLAGS_EXCEP<4> = 0b1;
+        FCSR_EXCEP<4> = 0b1;
+      else
+        process_float_exception_flags().action;
+      endif;
+    endif;
+  }
+
+// TODO:
+op fcvt_lu_s2(rd: X, rs1: F)
+  syntax = format("%s", fcvt_lu_s(rd, rs1, coerce(card(3), RM_RTZ)).syntax)
+  image  = format("%32s", fcvt_lu_s(rd, rs1, coerce(card(3), RM_RTZ)).image)
+  action = {
+    fcvt_lu_s(rd, rs1, coerce(card(3), RM_RTZ)).action;
+  }
+
+op fcvt_s_l(rd: F, rs1: X)
+  syntax = format("fcvt.s.l %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1101000%5s%5s%3s%5s1010011", "00010", rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    rd = -1;
+    temp_fps = int_to_float(FLOAT32, rs1<63..0>);
+    rd<31..0> = temp_fps<31..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fcvt_s_lu(rd: F, rs1: X)
+  syntax = format("fcvt.s.lu %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1101000%5s%5s%3s%5s1010011", "00011", rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+  // TODO:
+    tmp_word = 0;
+    temp_fps = int_to_float(FLOAT32, tmp_word);
+    if rs1<63> == 1 then
+      tmp_dword<62> = 1;
+      temp_fps = int_to_float(FLOAT32, tmp_dword<63..0>);
+      temp_fps = temp_fps + temp_fps;
+    endif;
+  //
+
+    tmp_dword = 0;
+    tmp_dword<62..0> = rs1<62..0>;
+
+    temp_fps2 = int_to_float(FLOAT32, tmp_dword<63..0>);
+    temp_fps = temp_fps + temp_fps2;
+
+    rd = -1;
+    rd<31..0> = temp_fps<31..0>;
+
+    process_float_exception_flags().action;
+  }
+
+//==================================================================================================
+// Instruction Groups
+//==================================================================================================
+
+op rv64f = fcvt_l_s
+         | fcvt_lu_s
+         | fcvt_l_s2 // TODO:
+         | fcvt_lu_s2 // TODO:
+         | fcvt_s_l
+         | fcvt_s_lu
+
+//==================================================================================================
+// The End
+//==================================================================================================
+
+#endif

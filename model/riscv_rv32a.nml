@@ -1,0 +1,221 @@
+/*
+ * Copyright 2017-2019 ISP RAS (http://www.ispras.ru)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+#ifndef RISCV_RV32A_INCLUDED
+#define RISCV_RV32A_INCLUDED
+
+//==================================================================================================
+// RV32A Standard Extension
+//==================================================================================================
+
+/*  LR.W +
+    SC.W +
+    AMOSWAP.W +
+    AMOADD.W +
+    AMOXOR.W +
+    AMOAND.W +
+    AMOOR.W +
+    AMOMIN.W +
+    AMOMAX.W +
+    AMOMINU.W +
+    AMOMAXU.W + */
+
+op lr_w(rd: X, rs1: X)
+  syntax = format("lr.w %s, (%s)", rd.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "00010", "0", "0", "00000", rs1.image, "010", rd.image)
+  action = {
+    // TODO: This is a simplified specification that replicates how it is implemented in Spike.
+    LOAD_RESERVATION = rs1;
+    load_data(MEM_WORD, rs1).action; // return load_value
+    rd = sign_extend(XWORD, load_value<31..0>);
+  }
+
+// SC writes a word in rs2 to the address in rs1, provided a valid reservation still exists on that address.
+op sc_w(rd: X, rs2: X, rs1: X)
+  syntax = format("sc.w %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "00011", "0", "0", rs2.image, rs1.image, "010", rd.image)
+  action = {
+    // TODO: This is a simplified specification that replicates how it is implemented in Spike.
+    if rs1 == LOAD_RESERVATION then
+      store_data(MEM_WORD, rs1, sign_extend(XWORD, rs2<31..0>)).action;
+      rd = 0;
+    else
+      rd = 1;
+    endif;
+  }
+
+/*
+  The atomic memory operation (AMO) instructions perform read-modify-write operations for
+  multiprocessor synchronization and are encoded with an R-type instruction format.
+*/
+op amoswap_w(rd: X, rs2: X, rs1: X)
+/*  init = {
+    opcode_xtype = 0b0101111;
+    funct3 = 0b010;
+    funct7<6..2> = 0b00001;
+    ordering_rl = 0;
+    ordering_aq = 0;
+    funct7<0> = ordering_rl;
+    funct7<1> = ordering_aq;
+  }*/
+  syntax = format("amoswap.w %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "00001", "0", "0", rs2.image, rs1.image, "010", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_WORD, tmp_address).action; // return load_value
+    rd = sign_extend(XWORD, load_value<31..0>);
+    store_data(MEM_WORD, tmp_address, sign_extend(XWORD, rs2<31..0>)).action;
+  }
+
+op amoadd_w(rd: X, rs2: X, rs1: X)
+  syntax = format("amoadd.w %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "00000", "0", "0", rs2.image, rs1.image, "010", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_WORD, tmp_address).action; // return load_value
+    rd = sign_extend(XWORD, load_value<31..0>);
+
+    tmp_word = rd<31..0> + rs2<31..0>;
+    store_data(MEM_WORD, tmp_address, sign_extend(XWORD, tmp_word)).action;
+  }
+
+op amoand_w(rd: X, rs2: X, rs1: X)
+  syntax = format("amoand.w %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "01100", "0", "0", rs2.image, rs1.image, "010", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_WORD, tmp_address).action; // return load_value
+    rd = sign_extend(XWORD, load_value<31..0>);
+
+    tmp_word = rd<31..0> & rs2<31..0>;
+    store_data(MEM_WORD, tmp_address, sign_extend(XWORD, tmp_word)).action;
+  }
+
+op amoor_w(rd: X, rs2: X, rs1: X)
+  syntax = format("amoor.w %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "01000", "0", "0", rs2.image, rs1.image, "010", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_WORD, tmp_address).action; // return load_value
+    rd = sign_extend(XWORD, load_value<31..0>);
+
+    tmp_word = rd<31..0> | rs2<31..0>;
+    store_data(MEM_WORD, tmp_address, sign_extend(XWORD, tmp_word)).action;
+  }
+
+op amoxor_w(rd: X, rs2: X, rs1: X)
+  syntax = format("amoxor.w %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "00100", "0", "0", rs2.image, rs1.image, "010", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_WORD, tmp_address).action; // return load_value
+    rd = sign_extend(XWORD, load_value<31..0>);
+
+    tmp_word = rd<31..0> ^ rs2<31..0>;
+    store_data(MEM_WORD, tmp_address, sign_extend(XWORD, tmp_word)).action;
+  }
+
+op amomin_w(rd: X, rs2: X, rs1: X)
+  syntax = format("amomin.w %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "10000", "0", "0", rs2.image, rs1.image, "010", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_WORD, tmp_address).action; // return load_value
+    rd = sign_extend(XWORD, load_value<31..0>);
+
+    tmp_int1 = coerce(INT, rd);
+    tmp_int2 = coerce(INT, rs2);
+
+    if tmp_int1 < tmp_int2 then
+      tmp_word = rd<31..0>;
+    else
+      tmp_word = rs2<31..0>;
+    endif;
+
+    store_data(MEM_WORD, tmp_address, sign_extend(XWORD, tmp_word)).action;
+  }
+
+op amomax_w(rd: X, rs2: X, rs1: X)
+  syntax = format("amomax.w %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "10100", "0", "0", rs2.image, rs1.image, "010", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_WORD, tmp_address).action; // return load_value
+    rd = sign_extend(XWORD, load_value<31..0>);
+
+    tmp_int1 = coerce(INT, rd);
+    tmp_int2 = coerce(INT, rs2);
+
+    if tmp_int1 > tmp_int2 then
+      tmp_word = rd<31..0>;
+    else
+      tmp_word = rs2<31..0>;
+    endif;
+
+    store_data(MEM_WORD, tmp_address, sign_extend(XWORD, tmp_word)).action;
+  }
+
+op amominu_w(rd: X, rs2: X, rs1: X)
+  syntax = format("amominu.w %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "11000", "0", "0", rs2.image, rs1.image, "010", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_WORD, tmp_address).action; // return load_value
+    rd = sign_extend(XWORD, load_value<31..0>);
+
+    if rd<31..0> < rs2<31..0> then
+      tmp_word = rd<31..0>;
+    else
+      tmp_word = rs2<31..0>;
+    endif;
+
+    store_data(MEM_WORD, tmp_address, sign_extend(XWORD, tmp_word)).action;
+  }
+
+op amomaxu_w(rd: X, rs2: X, rs1: X)
+  syntax = format("amomaxu.w %s, %s, (%s)", rd.syntax, rs2.syntax, rs1.syntax)
+  image  = format("%5s%1s%1s%5s%5s%3s%5s0101111", "11100", "0", "0", rs2.image, rs1.image, "010", rd.image)
+  action = {
+    tmp_address = rs1;
+    load_data(MEM_WORD, tmp_address).action; // return load_value
+    rd = sign_extend(XWORD, load_value<31..0>);
+
+    if rd<31..0> > rs2<31..0> then
+      tmp_word = rd<31..0>;
+    else
+      tmp_word = rs2<31..0>;
+    endif;
+
+    store_data(MEM_WORD, tmp_address, sign_extend(XWORD, tmp_word)).action;
+  }
+
+//==================================================================================================
+
+op rv32a = lr_w
+         | sc_w
+         | amoswap_w
+         | amoadd_w
+         | amoand_w
+         | amoor_w
+         | amoxor_w
+         | amomin_w
+         | amomax_w
+         | amominu_w
+         | amomaxu_w
+
+//==================================================================================================
+
+#endif

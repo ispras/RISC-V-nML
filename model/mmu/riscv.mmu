@@ -1,0 +1,775 @@
+/*
+ * Copyright 2018-2019 ISP RAS (http://www.ispras.ru)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+// Sv32:
+// Sv64: null
+
+let LOAD_OP  = 0
+let STORE_OP = 1
+
+#ifdef RV64I
+  let XLEN = 64
+#else
+  let XLEN = 32
+#endif
+
+/* For RV32, four CSRs, pmpcfg0{pmpcfg3, hold the configurations pmp0cfg-pmp15cfg for the 16 PMP
+entries. PMPCFGx = {pmp(x*4+3)cfg, pmp(x*4+2)cfg, pmp(x*4+1)cfg, pmp(x*4+0)cfg}
+Physical Memory Protection (PMP) entries are described by an 8-bit configuration register and one
+MXLEN-bit address register.
+*/
+// For RV32: 32-bit
+extern PMPCFG0 = PMPCFG0 // pmp3cfg pmp2cfg pmp1cfg pmp0cfg
+extern PMPCFG2 = PMPCFG2
+
+// Only for RV32
+extern PMPCFG1 = PMPCFG1
+extern PMPCFG3 = PMPCFG3
+
+// Supervisor address translation and protection
+extern SATP = SATP
+// The physical page number of the root page table is stored in the satp register's PPN field.
+extern SATP_PPN = SATP_PPN // RV32: 22-bit / RV64: 44-bit
+extern SATP_MODE = SATP_MODE // 0 - No translation or protection.
+
+// For Sv32, PAGESIZE=2^12 and LEVELS=2
+let PAGESIZE = 2 ** 12
+#ifdef RV32FULL
+  let LEVELS   = 2
+#else
+  #ifdef RV64Sv39
+    let LEVELS   = 3
+  #else
+    // Sv48
+    let LEVELS   = 4
+  #endif
+#endif
+
+// For Sv32, PTESIZE=4
+#ifdef RV32FULL
+  let PTESIZE = 4
+#else
+  // Sv39, Sv 48
+  let PTESIZE = 8
+#endif
+
+// Sv32 page tables consist of 2x10 page-table entries (PTEs), each of four bytes.
+#ifdef RV32FULL
+  let PTE_SIZE = 2**10
+#else
+  // Sv39, Sv48
+  let PTE_SIZE = 2**9
+#endif
+
+//==================================================================================================
+// Address Types
+//==================================================================================================
+
+// TODO: let VA_BITS = 32
+
+struct VASv39 (
+  vpn2   : 9, // 38..30
+  vpn1   : 9, // 29..21
+  vpn0   : 9, // 20..12
+  offset : 12 // 11..0
+)
+
+struct PASv39 (
+  ppn2   : 26, // 55..30
+  ppn1   : 9,  // 29..21
+  ppn0   : 9,  // 20..12
+  offset : 12  // 11..0
+)
+
+// Sv32 virtual address.
+struct VASv32 (
+  vpn1   : 10, // 31..22
+  vpn0   : 10, // 21..12
+  offset : 12  // 11..0
+)
+
+address VA(
+#ifdef MEM_V64
+  value  : 53,
+#else // MEM_SV32
+  value  : 32,
+#endif
+  type   : 1,
+  is_pa  : 1,
+  i_flag : 1,
+#ifdef MEM_V64
+  i      : 2,
+  ppn    : 44,
+  pa     : 56
+#else // MEM_SV32
+  i      : 1,
+  ppn    : 22,
+  pa     : 34
+#endif
+)
+
+// Sv32 physical address.
+struct PASv32 (
+  ppn1   : 12, // 33..22
+  ppn0   : 10, // 21..12
+  offset : 12,  // 11..0
+  error  : 1
+)
+
+address PA(
+#ifdef MEM_V64
+  value: 56
+#else // MEM_SV32
+  value: 34
+#endif
+)
+
+address PTAddress(
+#ifdef MEM_V64
+  value: 56
+#else // MEM_SV32
+  value: 34
+#endif
+)
+
+//==================================================================================================
+// Initializing the VA fields
+//==================================================================================================
+
+/* TODO:
+op va_initializing(va: VA)
+init = {
+  va.is_pa = 0;
+  va.pa = 0;
+  va.ppn = 0;
+#ifdef MEM_V64
+#else
+  va.i = 1; // Sv32
+#endif
+} */
+
+op store_global(va: VA)
+init = {
+  va.type = STORE_OP;
+  va.is_pa = 0;
+  va.pa = 0;
+  va.ppn = 0;
+  va.i_flag = 0;
+  va.i = 0;
+}
+
+op load_global(va: VA)
+init = {
+  va.type = LOAD_OP;
+  va.is_pa = 0;
+  va.pa = 0;
+  va.ppn = 0;
+  va.i_flag = 0;
+  va.i = 0;
+}
+
+//==================================================================================================
+// Translation Buffers
+//==================================================================================================
+struct PTEntry (
+  ppn1: 12,
+  ppn0: 10,
+  rsw: 2,
+  d: 1, a: 1, g: 1, u: 1, x: 1, w: 1, r: 1, v: 1
+)
+
+#ifdef MEM_V64
+// Sv39 Page Table Entry
+memory buffer PT39 (va: VA)
+  ways = 1
+  sets = PTE_SIZE
+  entry  = (reserved: 10, ppn2: 26, ppn1: 9, ppn0: 9, rsw: 2, d: 1, a: 1, g: 1, u: 1, x: 1, w: 1, r: 1, v: 1)
+  index  = 0
+  match  = 0
+  policy = NONE
+
+// Sv48 Page Table Entry
+memory buffer PT48 (va: VA)
+  ways = 1
+  sets = PTE_SIZE
+  entry  = (reserved: 10, ppn3: 17, ppn2: 9, ppn1: 9, ppn0: 9, rsw: 2, d: 1, a: 1, g: 1, u: 1, x: 1, w: 1, r: 1, v: 1)
+  index  = 0
+  match  = 0
+  policy = NONE
+
+#else // MEM_SV32
+// Sv32 Page Table Entry
+memory buffer PT (va: VA)
+  ways = 1
+  sets = PTE_SIZE
+  entry  = (ppn1: 12, ppn0: 10, rsw: 2, d: 1, a: 1, g: 1, u: 1, x: 1, w: 1, r: 1, v: 1)
+  index  = 0
+  match  = 0
+  policy = NONE
+#endif
+
+/* The V bit indicates whether the PTE is valid; if it is 0, all other bits in the PTE are
+don't-cares and may be used freely by software.
+   R, W, and X, indicate whether the page is readable, writable, and executable, respectively.
+   The RSW field is reserved for use by supervisor software; the implementation shall ignore this
+field.
+*/
+
+//==================================================================================================
+// Translate Address
+//==================================================================================================
+
+//==================================================================================================
+// Sv32
+//==================================================================================================
+
+#ifndef MEM_V64
+// Sv32: step 2-4
+function SV32TranslateCycle (va: VA): PT.entry
+  var pte: PT.entry;
+  var temp_address: PTAddress;
+  var temp_va: VA;
+  var a: 34;
+  var temp: 34;
+  {
+    temp = 0;
+    if va.i == 1 then
+      // Step 1
+      temp<21..0> = SATP_PPN;
+      a = temp << 12; //a = temp * PAGESIZE;
+
+      temp = 0;
+      //temp_address = a + va.value<31-(1-i)*10..22-(1-i)*10> * PTESIZE;
+      temp<9..0> = va.value<31..22>;
+    elif va.i == 0 then
+      temp<21..0> = va.ppn;
+      a = temp << 12; //a = ppn * PAGESIZE;
+
+      temp = 0;
+      temp<9..0> = va.value<21..12>;
+    else
+      trace("ERROR: the i must be in range [1,0]");
+    endif;
+    temp_address.value = temp << 2;
+    temp_address.value<33..12> = a<33..12>;
+
+    temp_va = va;
+    temp_va.value = 0;
+    temp_va.is_pa = 1;
+    temp_va.pa = temp_address.value;
+
+   // trace("SV32TranslateCycle.temp_address.value = 0x%x", temp_address.value);
+    pte = PT(temp_va);
+    //trace("SV32TranslateCycle: pte = 0x%x", pte.ppn1::pte.ppn0::pte.rsw::pte.d::pte.a::pte.g::pte.u::pte.x::pte.w::pte.r::pte.v);
+    //trace("SV32TranslateCycle: pte.v = 0x%x, pte.r = 0x%x, pte.w = 0x%x", pte.v, pte.r, pte.w);
+
+    // TODO: if v == 0 || (r == 0 && w == 1) then
+    if pte.v == 0 then
+      trace("SV32TranslateCycle: page-fault exception (pte.v = 0x%x)", pte.v);
+      exception("page_fault_exception");
+    endif;
+    if pte.r == 0 && pte.w == 1 then
+      trace("SV32TranslateCycle: page-fault exception (pte.r = 0x%x, pte.w = 0x%x)", pte.r, pte.w);
+      exception("page_fault_exception");
+    endif;
+
+    return pte;
+  }
+
+function SV32Translate (va: VA): PA
+  var pte: PT.entry;
+  var a: 34;
+  var pa: PA;
+  var temp: 34;
+  {
+    // Step 1-4
+    pte = SV32TranslateCycle(va);
+    va.ppn = pte.ppn1::pte.ppn0;
+
+    if pte.r == 1 || pte.x == 1 then
+      // Go step 5
+      trace("Go step 5: (pte.r = 0x%x, pte.x = 0x%x)", pte.r, pte.x);
+    else
+      //i = LEVELS - 1;
+      va.i = 0;
+      pte = SV32TranslateCycle(va);
+      if pte.r == 1 || pte.x == 1 then
+        // Go step 5
+        trace("Go step 5: (pte.r = 0x%x, pte.x = 0x%x)", pte.r, pte.x);
+      else // i < 0
+        trace("SV32Translate: page-fault exception (i < 0)");
+        exception("page_fault_exception");
+      endif;
+    endif;
+
+    // Step 5
+    // TODO:
+
+    // Step 6
+    if va.i == 1 && pte.ppn0 != 0 then
+      trace("SV32Translate 6: page-fault exception (va.i = 0x%x)", va.i);
+      exception("page_fault_exception");
+    endif;
+
+    // Step 7
+    //if pte.a == 0 || va.type == STORE_OP && pte.d == 0 then
+    if pte.a == 0 then
+      trace("SV32Translate 7: page-fault exception (pte.a = 0x%x)", pte.a);
+      exception("page_fault_exception");
+    endif;
+    if va.type == STORE_OP && pte.d == 0 then
+      trace("SV32Translate 7: page-fault exception (pte.d = 0x%x)", pte.d);
+      exception("page_fault_exception");
+    endif;
+    // TODO: or
+
+    // The translation is successful.
+    pa.value<11..0> = va.value<11..0>;
+    pa.value<33..22> = pte.ppn1;
+    pa.value<21..12> = pte.ppn0;
+    if va.i == 1 then // Sv32(!)
+      pa.value<21..12> = va.value<21..12>;
+    endif;
+
+    //PT(temp_va) = pte; // TODO: !
+    return pa;
+  }
+#endif
+
+//==================================================================================================
+// Sv39
+//==================================================================================================
+
+#ifdef MEM_V64
+// Sv39: step 2-4
+function SV39TranslateCycle (va: VA): PT39.entry
+  var pte: PT39.entry;
+  var temp_address: PTAddress;
+  var temp_va: VA;
+  var a: 56;
+  var temp: 56;
+  {
+    temp = 0;
+    if va.i == 2 then
+      // Step 1
+      temp<43..0> = SATP_PPN;
+      a = temp << 12; //a = temp * PAGESIZE;
+
+      temp = 0;
+      //temp_address = a + va.value<31-(1-i)*10..22-(1-i)*10> * PTESIZE;
+      temp<8..0> = va.value<38..30>;
+    elif va.i == 1 then
+      temp<43..0> = va.ppn;
+      a = temp << 12; //a = ppn * PAGESIZE;
+
+      temp = 0;
+      temp<8..0> = va.value<29..21>;
+    elif va.i == 0 then
+      temp<43..0> = va.ppn;
+      a = temp << 12; //a = ppn * PAGESIZE;
+
+      temp = 0;
+      temp<8..0> = va.value<20..12>;
+    else
+      trace("ERROR: the i must be in range [2,0]");
+    endif;
+    temp_address.value = temp << 3;
+    temp_address.value<55..12> = a<55..12>;
+
+    temp_va = va;
+    temp_va.value = 0;
+    temp_va.is_pa = 1;
+    temp_va.pa = temp_address.value;
+
+    //trace("SV39TranslateCycle.temp_address.value = 0x%x", temp_address.value);
+    pte = PT39(temp_va);
+    //trace("SV39TranslateCycle: pte = 0x%x", pte.ppn2::pte.ppn1::pte.ppn0::pte.rsw::pte.d::pte.a::pte.g::pte.u::pte.x::pte.w::pte.r::pte.v);
+    //trace("SV39TranslateCycle: pte.v = 0x%x, pte.r = 0x%x, pte.w = 0x%x", pte.v, pte.r, pte.w);
+
+    // TODO: if v == 0 || (r == 0 && w == 1) then
+    if pte.v == 0 then
+      trace("SV39TranslateCycle: page-fault exception (pte.v = 0x%x)", pte.v);
+      exception("page_fault_exception");
+    endif;
+    if pte.r == 0 && pte.w == 1 then
+      trace("SV39TranslateCycle: page-fault exception (pte.r = 0x%x, pte.w = 0x%x)", pte.r, pte.w);
+      exception("page_fault_exception");
+    endif;
+
+    return pte;
+  }
+
+function SV39Translate (va: VA): PA
+  var pte: PT39.entry;
+  var pa: PA;
+  var temp: 56;
+  var a: 56;
+  {
+    // Step 1-4
+    pte = SV39TranslateCycle(va);
+
+    va.ppn = pte.ppn2::pte.ppn1::pte.ppn0;
+    if pte.r == 1 || pte.x == 1 then
+      // Go step 5
+      trace("Go step 5: (pte.r = 0x%x, pte.x = 0x%x)", pte.r, pte.x);
+    else
+      //i = LEVELS - 1;
+      va.i = 1;
+      pte = SV39TranslateCycle(va);
+      if pte.r == 1 || pte.x == 1 then
+        // Go step 5
+        trace("Go step 5: (pte.r = 0x%x, pte.x = 0x%x)", pte.r, pte.x);
+      else // i < 0
+        //i = LEVELS - 1;
+        va.i = 0;
+        pte = SV39TranslateCycle(va);
+        if pte.r == 1 || pte.x == 1 then
+          // Go step 5
+          trace("Go step 5: (pte.r = 0x%x, pte.x = 0x%x)", pte.r, pte.x);
+        else // i < 0
+          trace("SV39Translate: page-fault exception (i < 0)");
+          exception("page_fault_exception");
+        endif;
+      endif;
+    endif;
+
+    // Step 5
+    // TODO:
+
+    // Step 6
+    if va.i == 2 && pte.ppn1 != 0 then
+      trace("SV39Translate 6: page-fault exception (va.i = 0x%x)", va.i);
+      exception("page_fault_exception");
+    endif;
+    if va.i == 1 && pte.ppn0 != 0 then
+      trace("SV39Translate 6: page-fault exception (va.i = 0x%x)", va.i);
+      exception("page_fault_exception");
+    endif;
+
+    // Step 7
+    //if pte.a == 0 || va.type == STORE_OP && pte.d == 0 then
+    if pte.a == 0 then
+      trace("SV39Translate 7: page-fault exception (pte.a = 0x%x)", pte.a);
+      exception("page_fault_exception");
+    endif;
+    if va.type == STORE_OP && pte.d == 0 then
+      trace("SV39Translate 7: page-fault exception (pte.d = 0x%x)", pte.d);
+      exception("page_fault_exception");
+    endif;
+    // TODO: or
+
+    // The translation is successful.
+    pa.value<11..0> = va.value<11..0>;
+    pa.value<55..30> = pte.ppn2;
+    pa.value<29..21> = pte.ppn1;
+    pa.value<20..12> = pte.ppn0;
+    if va.i == 2 then
+      pa.value<29..21> = va.value<29..21>;
+    endif;
+    if va.i<0> == 1 then // Sv32(!)
+      pa.value<20..12> = va.value<20..12>;
+    endif;
+
+    //PT(temp_va) = pte; // TODO: !
+    return pa;
+  }
+
+//==================================================================================================
+// Sv48
+//==================================================================================================
+
+// Sv48: step 2-4
+function SV48TranslateCycle (va: VA): PT48.entry
+  var pte: PT48.entry;
+  var temp_address: PTAddress;
+  var temp_va: VA;
+  var a: 56;
+  var temp: 56;
+  {
+    //trace("LEVEL 0%x", va.i);
+
+    temp = 0;
+    if va.i == 3 then
+      // Step 1
+      temp<43..0> = SATP_PPN;
+      a = temp << 12; //a = temp * PAGESIZE;
+
+      temp = 0;
+      //temp_address = a + va.value<31-(1-i)*10..22-(1-i)*10> * PTESIZE;
+      temp<8..0> = va.value<47..39>;
+    elif va.i == 2 then
+      temp<43..0> = va.ppn;
+      a = temp << 12; //a = ppn * PAGESIZE;
+
+      temp = 0;
+      temp<8..0> = va.value<38..30>;
+    elif va.i == 1 then
+      temp<43..0> = va.ppn;
+      a = temp << 12; //a = ppn * PAGESIZE;
+
+      temp = 0;
+      temp<8..0> = va.value<29..21>;
+    elif va.i == 0 then
+      temp<43..0> = va.ppn;
+      a = temp << 12; //a = ppn * PAGESIZE;
+
+      temp = 0;
+      temp<8..0> = va.value<20..12>;
+    else
+      trace("ERROR: the i must be in range [3,0]");
+    endif;
+    temp_address.value = temp << 3;
+    temp_address.value<55..12> = a<55..12>;
+
+    temp_va = va;
+    temp_va.value = 0;
+    temp_va.is_pa = 1;
+    temp_va.pa = temp_address.value;
+
+    //trace("SV48TranslateCycle.temp_address.value = 0x%x", temp_address.value);
+    pte = PT48(temp_va);
+    //trace("SV48TranslateCycle: pte = 0x%x", pte.ppn3::pte.ppn2::pte.ppn1::pte.ppn0::pte.rsw::pte.d::pte.a::pte.g::pte.u::pte.x::pte.w::pte.r::pte.v);
+    //trace("SV48TranslateCycle: pte.v = 0x%x, pte.r = 0x%x, pte.w = 0x%x", pte.v, pte.r, pte.w);
+
+    // TODO: if v == 0 || (r == 0 && w == 1) then
+    if pte.v == 0 then
+      trace("SV48TranslateCycle: page-fault exception (pte.v = 0x%x)", pte.v);
+      exception("page_fault_exception");
+    endif;
+    if pte.r == 0 && pte.w == 1 then
+      trace("SV48TranslateCycle: page-fault exception (pte.r = 0x%x, pte.w = 0x%x)", pte.r, pte.w);
+      exception("page_fault_exception");
+    endif;
+
+    return pte;
+  }
+
+function SV48Translate (va: VA): PA
+  var pte: PT48.entry;
+  var pa: PA;
+  var temp: 56;
+  var a: 56;
+  {
+    // Step 1-4
+    pte = SV48TranslateCycle(va);
+
+    va.ppn = pte.ppn3::pte.ppn2::pte.ppn1::pte.ppn0;
+    if pte.r == 1 || pte.x == 1 then
+      // Go step 5
+      trace("Go step 5: (pte.r = 0x%x, pte.x = 0x%x)", pte.r, pte.x);
+    else
+      //i = LEVELS - 1;
+      va.i = 2;
+      pte = SV48TranslateCycle(va);
+      if pte.r == 1 || pte.x == 1 then
+        // Go step 5
+        trace("Go step 5: (pte.r = 0x%x, pte.x = 0x%x)", pte.r, pte.x);
+      else // i < 0
+        //i = LEVELS - 1;
+        va.i = 1;
+        pte = SV48TranslateCycle(va);
+        if pte.r == 1 || pte.x == 1 then
+          // Go step 5
+          trace("Go step 5: (pte.r = 0x%x, pte.x = 0x%x)", pte.r, pte.x);
+        else // i < 0
+          //i = LEVELS - 1;
+          va.i = 0;
+          pte = SV48TranslateCycle(va);
+          if pte.r == 1 || pte.x == 1 then
+            // Go step 5
+            trace("Go step 5: (pte.r = 0x%x, pte.x = 0x%x)", pte.r, pte.x);
+          else // i < 0
+            trace("SV48Translate: page-fault exception (i < 0)");
+            exception("page_fault_exception");
+          endif;
+        endif;
+      endif;
+    endif;
+
+    // Step 5
+    // TODO:
+
+    // Step 6
+    if va.i == 3 && pte.ppn2::pte.ppn1::pte.ppn0 != 0 then
+      trace("SV48Translate 6: page-fault exception (va.i = 0x%x)", va.i);
+      exception("page_fault_exception");
+    endif;
+    if va.i == 2 && pte.ppn1::pte.ppn0 != 0 then
+      trace("SV48Translate 6: page-fault exception (va.i = 0x%x)", va.i);
+      exception("page_fault_exception");
+    endif;
+    if va.i == 1 && pte.ppn0 != 0 then
+      trace("SV48Translate 6: page-fault exception (va.i = 0x%x)", va.i);
+      exception("page_fault_exception");
+    endif;
+
+    // Step 7
+    //if pte.a == 0 || va.type == STORE_OP && pte.d == 0 then
+    if pte.a == 0 then
+      trace("SV48Translate 7: page-fault exception (pte.a = 0x%x)", pte.a);
+      exception("page_fault_exception");
+    endif;
+    if va.type == STORE_OP && pte.d == 0 then
+      trace("SV48Translate 7: page-fault exception (pte.d = 0x%x)", pte.d);
+      exception("page_fault_exception");
+    endif;
+    // TODO: or
+
+    // The translation is successful.
+    pa.value<11..0> = va.value<11..0>;
+    pa.value<55..39> = pte.ppn3;
+    pa.value<38..30> = pte.ppn2;
+    pa.value<29..21> = pte.ppn1;
+    pa.value<20..12> = pte.ppn0;
+    if va.i == 3 then
+      pa.value<38..12> = va.value<38..12>;
+    elif va.i == 2 then
+      pa.value<29..12> = va.value<29..12>;
+    elif va.i == 1 then
+      pa.value<20..12> = va.value<20..12>;
+    endif;
+
+    //PT(temp_va) = pte; // TODO: !
+    return pa;
+  }
+
+#endif
+
+//extern SATP_CSR = SATP_CSR
+
+function TranslateAddress(va: VA): PA
+  var pa: PA;
+  {
+    if va.is_pa == 1 then
+      pa.value = va.pa;
+    else
+#ifdef MEM_V64
+      if SATP_MODE == 8 then
+        // Page-based 39-bit virtual addressing
+        pa = SV39Translate(va);
+      elif SATP_MODE == 9 then
+        // Page-based 48-bit virtual addressing
+        pa = SV48Translate(va);
+      else
+        // 1-7, 12-15 Reserved
+        // 10 Sv57    Reserved for page-based 57-bit virtual addressing.
+        // 11 Sv64    Reserved for page-based 64-bit virtual addressing.
+        trace("Mmu.TranslateAddress: Error. satp.mode=%x.", SATP_MODE);
+      endif;
+#else // MEM_SV32
+      pa = SV32Translate(va);
+#endif
+    endif;
+    //trace("TranslateAddress: va=%x, pa=%x", va.value, pa.value);
+
+    return pa;
+  }
+
+//==================================================================================================
+// Main Memory
+//==================================================================================================
+
+// A word of memory is defined as 32 bits (4 bytes).
+#ifdef MEM_V64
+  // Sv39 & Sv48
+  let DATA_SIZE = 64
+#else // MEM_SV32
+  let DATA_SIZE = 32
+#endif
+
+// A RISC-V hart has a single byte-addressable address space of 2XLEN bytes for all memory accesses.
+// TODO: extern
+// Memory Size
+let MEM_SIZE = XLEN
+// Memory Size is 2 ** XLEN Bytes
+let MEM_SIZE_IN_WORDS = 2 ** (MEM_SIZE)
+
+buffer MEM (pa: PA)
+  // Direct-mapped buffer.
+  ways  = 1
+  sets  = MEM_SIZE_IN_WORDS
+  entry = (DATA: DATA_SIZE)
+#ifdef MEM_V64
+  // Sv39 & Sv48
+  index = pa.value<56..3>
+#else // MEM_SV32
+  index = pa.value<33..2>
+#endif
+//  index = pa.value >> 2
+  match = 0
+
+//==================================================================================================
+// Memory Management Unit
+//==================================================================================================
+
+// Check the MODE field, which selects the current address-translation scheme
+function PreTranslateAddress(va: VA): PA
+  var pa: PA;
+  {
+    // Index Initialization
+    if va.i_flag == 0 then
+      va.i_flag = 1; // Sv32
+#ifdef MEM_V64
+      if SATP_MODE == 8 then
+        va.i = 2; // Sv39
+      else
+        va.i = 3; // Sv48
+      endif;
+#else // MEM_SV32
+      va.i = 1; // Sv32
+#endif
+    endif;
+
+//    trace("PreTranslateAddress va: value:%x, type:%x, is_pa:%x, i:%x, ppn:%x, pa:%x",
+//                                   va.value, va.type, va.is_pa, va.i, va.ppn, va.pa);
+    if SATP_MODE != 0 then
+      pa = TranslateAddress(va);
+    else
+#ifdef MEM_V64
+      // Sv39 & Sv48
+      pa.value<52..0> = va.value;
+#else // MEM_SV32
+      pa.value<31..0> = va.value;
+#endif
+      trace("Mmu.PreTranslateAddress: satp.mode=%x. No translation or protection.", SATP_MODE);
+    endif;
+
+    //trace("PreTranslateAddress");
+    return pa;
+  }
+
+// Store/Load memory
+mmu memory (va: VA) = (data: DATA_SIZE)
+  var pa: PA;
+  read = {
+    //trace("PreTranslateAddress: read 1");
+    pa = PreTranslateAddress(va);
+    //trace("PreTranslateAddress: read 2");
+    data = MEM(pa);
+    //trace("PreTranslateAddress: read 3");
+  }
+
+  write = {
+    //trace("PreTranslateAddress: write 1");
+    pa = PreTranslateAddress(va);
+    //trace("PreTranslateAddress: write 2");
+    MEM(pa) = data;
+    //trace("PreTranslateAddress: write 3");
+  }
+
+//==================================================================================================
+// The End
+//==================================================================================================

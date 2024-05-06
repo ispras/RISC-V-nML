@@ -1,0 +1,5 @@
+#ifdef RV64I
+  let XLEN1 = 64
+#else
+  let XLEN1 = 32
+#endif

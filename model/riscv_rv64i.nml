@@ -1,0 +1,235 @@
+/*
+ * Copyright 2017-2020 ISP RAS (http://www.ispras.ru)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+#ifndef RISCV_RV64I_INCLUDED
+#define RISCV_RV64I_INCLUDED
+
+//==================================================================================================
+// RV64I Base Instruction Set (in addition to RV32I)
+//==================================================================================================
+
+/*
+  Instructions (number: 12):
+    LWU +
+    LD +
+    SD +
+    SLLI (defined in RV32I)
+    SRLI (defined in RV32I)
+    SRAI (defined in RV32I)
+    ADDIW +
+    SLLIW +
+    SRLIW +
+    SRAIW +
+    ADDW +
+    SUBW +
+    SLLW +
+    SRLW +
+    SRAW +
+*/
+
+//==================================================================================================
+// Instructions
+//==================================================================================================
+
+/*
+  LWU (I-type)
+
+  Format: lwu  rd, rs1, imm
+
+  The LW instruction defined in RV32I loads a 32-bit value from memory and sign-extends this
+  to 64 bits before storing it in register rd for RV64I. The LWU instruction, on the other hand,
+  zero-extends the 32-bit value from memory for RV64I.
+*/
+op lwu(rd: X, rs1: X, imm: int(12))
+  syntax = format("lwu %s, %d(%s)", rd.syntax, imm, rs1.syntax)
+  image  = format("%12s%s110%s0000011", imm, rs1.image, rd.image)
+  action = {
+    tmp_address = rs1 + sign_extend(XWORD, imm);
+    load_rvi(tmp_address, rd, MEM_WORD, ZERO_EXTEND_VALUE).action;
+  }
+
+/*
+  LD (I-type)
+  SD (S-type)
+
+  Format: ld rd, rs1, imm
+  Format: sd rs1, rs2, imm
+
+  RV64I extends the address space to 64 bits. The execution environment will define what portions
+  of the address space are legal to access.
+
+  LD loads a 64-bit value from memory into register rd for RV64I.
+  SD stores 64-bit value from register rs2 to memory.
+*/
+op ld(rd: X, rs1: X, imm: int(12))
+  syntax = format("ld %s, %d(%s)", rd.syntax, imm, rs1.syntax)
+  image  = format("%12s%s011%s0000011", imm, rs1.image, rd.image)
+  action = {
+    tmp_address = rs1 + sign_extend(XWORD, imm);
+    load_rvi(tmp_address, rd, MEM_DWORD, ZERO_EXTEND_VALUE).action;
+  }
+
+op sd(rs2: X, rs1: X, imm: int(12))
+  syntax = format("sd %s, %d(%s)", rs2.syntax, imm, rs1.syntax)
+  image  = format("%7s%s%s011%5s0100011", imm<11..5>, rs2.image, rs1.image, imm<4..0>)
+  action = {
+    tmp_address = rs1 + sign_extend(XWORD, imm);
+    store_rvi(tmp_address, rs2, MEM_DWORD).action;
+  }
+
+/*
+  ADDIW (I-type)
+
+  Format: addiw rd, rs1, imm
+
+  ADDIW is an RV64I-only instruction that adds the sign-extended 12-bit immediate to
+  register rs1 and produces the proper sign-extension of a 32-bit result in rd. Overflows
+  are ignored and the result is the low 32 bits of the result sign-extended to 64 bits.
+*/
+op addiw(rd: X, rs1: X, imm: int(12))
+  syntax = format("addiw %s, %s, %d", rd.syntax, rs1.syntax, imm)
+  image  = format("%12s%s000%s0011011", imm, rs1.image, rd.image)
+  action = {
+    rd = sign_extend(XWORD, rs1<31..0> + sign_extend(WORD, imm));
+  }
+
+/*
+  SLLIW (I-type)
+  SRLIW (I-type)
+  SRAIW (I-type)
+
+  Format: slliw rd, rs1, imm
+  Format: srliw rd, rs1, imm
+  Format: sraiw rd, rs1, imm
+
+  Shifts by a constant are encoded as a specialization of the I-type format using the same
+  instruction opcode as RV32I. The operand to be shifted is in rs1, and the shift amount is
+  encoded in the lower 6 bits of the I-immediate field for RV64I. The right shift type is
+  encoded in bit 30.
+
+  SLLIW is a logical left shift (zeros are shifted into the lower bits).
+  SRLIW is a logical right shift (zeros are shifted into the upper bits).
+  SRAIW is an arithmetic right shift (the original sign bit is copied into the vacated upper bits).
+
+  SLLIW, SRLIW, and SRAIW are RV64I-only instructions that are defined analogously to
+  SLLI, SRLI, and SRAI but operate on 32-bit values and produce signed 32-bit results.
+  SLLIW, SRLIW, and SRAIW generate an illegal instruction exception if imm[5] = 0.
+*/
+op slliw(rd: X, rs1: X, imm: card(5))
+  syntax = format("slliw %s, %s, 0x%x", rd.syntax, rs1.syntax, imm)
+  image  = format("0000000%5s%s001%s0011011", imm, rs1.image, rd.image)
+  action = {
+    rd = sign_extend(XWORD, rs1<31..0> << zero_extend(WORD, imm));
+  }
+
+op srliw(rd: X, rs1: X, imm: card(5))
+  syntax = format("srliw %s, %s, 0x%x", rd.syntax, rs1.syntax, imm)
+  image  = format("0000000%5s%s101%s0011011", imm, rs1.image, rd.image)
+  action = {
+    rd = sign_extend(XWORD, rs1<31..0> >> zero_extend(WORD, imm));
+  }
+
+op sraiw(rd: X, rs1: X, imm: card(5))
+  syntax = format("sraiw %s, %s, 0x%x", rd.syntax, rs1.syntax, imm)
+  image  = format("0100000%5s%s101%s0011011", imm, rs1.image, rd.image)
+  action = {
+    rd = sign_extend(XWORD, cast(INT, rs1<31..0>) >> zero_extend(INT, imm));
+  }
+
+/*
+  ADDW and SUBW (R-type)
+
+  Format: addw rd, rs1, rs2
+          subw rd, rs1, rs2
+
+  ADDW and SUBW are RV64I-only instructions that are defined analogously to
+  ADD and SUB but operate on 32-bit values and produce signed 32-bit results. Overflows
+  are ignored, and the low 32-bits of the result is sign-extended to 64-bits and written
+  to the destination register.
+*/
+op addw(rd: X, rs1: X, rs2: X)
+  syntax = format("addw %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000000%s%s000%s0111011", rs2.image, rs1.image, rd.image)
+  action = {
+    rd = sign_extend(XWORD, rs1<31..0> + rs2<31..0>);
+  }
+
+op subw(rd: X, rs1: X, rs2: X)
+  syntax = format("subw %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0100000%s%s000%s0111011", rs2.image, rs1.image, rd.image)
+  action = {
+    rd = sign_extend(XWORD, rs1<31..0> - rs2<31..0>);
+  }
+
+/*
+  SLL (R-type)
+  SRL (R-type)
+  SRA (R-type)
+
+  Format: sllw rd, rs1, rs2
+          srlw rd, rs1, rs2
+          sraw rd, rs1, rs2
+
+  SLLW, SRLW, and SRAW perform logical left, logical right, and arithmetic right shifts on
+  the value in register rs1 by the shift amount held in register rs2.
+
+  SLLW, SRLW, and SRAW are RV64I-only instructions defined analogously to SLL, SRL, and SRA
+  but operate on 32-bit values and produce signed 32-bit results. The shift amount is given
+  by rs2[4:0].
+*/
+op sllw(rd: X, rs1: X, rs2: X)
+  syntax = format("sllw %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000000%s%s001%s0111011", rs2.image, rs1.image, rd.image)
+  action = {
+    rd = sign_extend(XWORD, rs1<31..0> << zero_extend(WORD, rs2<4..0>));
+  }
+
+op srlw(rd: X, rs1: X, rs2: X)
+  syntax = format("srlw %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000000%s%s101%s0111011", rs2.image, rs1.image, rd.image)
+  action = {
+    rd = sign_extend(XWORD, rs1<31..0> >> zero_extend(WORD, rs2<4..0>));
+  }
+
+op sraw(rd: X, rs1: X, rs2: X)
+  syntax = format("sraw %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0100000%s%s101%s0111011", rs2.image, rs1.image, rd.image)
+  action = {
+    rd = sign_extend(XWORD, cast(INT, rs1<31..0>) >> zero_extend(INT, rs2<4..0>));
+  }
+
+//==================================================================================================
+// Instruction Groups
+//==================================================================================================
+
+op rv64i = lwu
+         | ld
+         | sd
+         | addiw
+         | slliw
+         | srliw
+         | sraiw
+         | addw
+         | subw
+         | sllw
+         | srlw
+         | sraw
+
+//==================================================================================================
+// The End
+//==================================================================================================
+
+#endif

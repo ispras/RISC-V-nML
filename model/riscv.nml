@@ -1,0 +1,901 @@
+/*
+ * Copyright 2017-2019 ISP RAS (http://www.ispras.ru)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+//==================================================================================================
+// Configuration of Supported Instruction Sets
+//==================================================================================================
+
+// XLEN: Width of X Registers (in bits)
+// SHLEN: Number of Bits Required to Store Shift Amount for X Registers
+#ifdef RV64I
+  let XLEN = 64
+  let XLEN_RANGE = 63
+  let SHLEN = 6
+#else
+  let XLEN = 32
+  let SHLEN = 5
+#endif
+
+//==================================================================================================
+// Types
+//==================================================================================================
+
+// Configuration-Dependent Word for X Registers
+type XWORD = card(XLEN)
+
+// Configuration-Dependent Signed Word for X Registers
+type XINT = int(XLEN)
+
+// Configuration-Dependent Double Word
+type XDWORD = card(XLEN*2)
+
+// Configuration-Dependent Signed Double Word
+type XLONG = int(XLEN*2)
+
+// Unsigned Types
+type   BIT = card(1)
+type  BYTE = card(8)
+type HWORD = card(16)
+type  WORD = card(32)
+type DWORD = card(64)
+type QWORD = card(128)
+
+// Signed Types
+type SHORT = int(16)
+type   INT = int(32)
+type  LONG = int(64)
+
+// Floating Point Types
+type  FLOAT32 = float(23, 8)
+type  FLOAT64 = float(52, 11)
+type FLOAT128 = float(112, 15)
+
+//==================================================================================================
+// Constants
+//==================================================================================================
+
+let FP_FMT_S = 0b00
+let FP_FMT_D = 0b01
+let FP_FMT_Q = 0b11
+
+// Memory read/write operations type
+let MEM_DWORD = 8
+let MEM_WORD  = 4
+let MEM_HWORD = 2
+let MEM_BYTE  = 1
+
+let SIGN_EXTEND_VALUE = 1
+let ZERO_EXTEND_VALUE = 0
+
+//==================================================================================================
+// Registers and Memory
+//==================================================================================================
+
+// General-Purpose Registers
+reg XREG [32, XWORD]
+
+// Floating-Point Registers
+#ifdef RV32F
+  #ifdef RV128F
+    let FLEN = 128
+  #else
+    #ifdef RV64F
+      let FLEN = 64
+    #else
+      let FLEN = 32
+    #endif
+  #endif
+
+  reg FPR [32, card(FLEN)]
+#endif
+
+// Program Counter
+reg PC [XWORD]
+
+// Control and Status Registers (CSRs) Type
+type CSR_TYPE = card(XLEN)
+
+// Control and Status Registers (CSRs), Count = 4096 (2 ** 12)
+reg CSR[1 << 12, CSR_TYPE]
+
+// Memory Size
+#ifdef MEM_SV32
+  let MEM_SIZE = 34 - 2
+#else //#ifdef MEM_V64
+  let MEM_SIZE = 56 - 3
+#endif
+
+// Memory Size is 2 ** XLEN Bytes
+let MEM_SIZE_IN_WORDS = 2 ** (MEM_SIZE)
+
+// Main Memory
+#ifdef MEM_SV32
+  shared mem MEM [MEM_SIZE_IN_WORDS, WORD]
+#else //#ifdef MEM_V64
+  shared mem MEM [MEM_SIZE_IN_WORDS, DWORD]
+#endif
+
+// Register that stores reserved address used by instructions LR/SC from RV32A and RV64A.
+// TODO: This is a simplified specification that replicates how it is implemented in Spike.
+#ifdef RV32A
+  reg LOAD_RESERVATION[XWORD]
+#else
+  #ifdef RV64A
+    reg LOAD_RESERVATION[XWORD]
+  #endif
+#endif
+
+//==================================================================================================
+// Addressing Modes
+//==================================================================================================
+
+/*
+"zero", "ra  ", "sp  ", "gp  ", "tp  ", "t0  ",  "t1  ",  "t2 ",
+"s0  ", "s1  ", "a0  ", "a1  ", "a2  ", "a3  ",  "a4  ",  "a5 ",
+"a6  ", "a7  ", "s2  ", "s3  ", "s4  ", "s5  ",  "s6  ",  "s7 ",
+"s8  ", "s9  ", "s10 ", "s11 ", "t3  ", "t4  ",  "t5  ",  "t6  "
+*/
+
+// Hard-wired zero
+mode ZERO () = XREG [0]
+  syntax = format("zero")
+
+// Return address
+mode RA () = XREG [1]
+  syntax = format("ra")
+
+// Stack pointer
+mode SP () = XREG [2]
+  syntax = format("sp")
+
+// Global pointer
+mode GP () = XREG [3]
+  syntax = format("gp")
+
+// Thread pointer
+mode TP () = XREG [4]
+  syntax = format("tp")
+
+// Temporaries Caller
+mode TemporariesCaller (i: card(3))
+  syntax = format("t%d", i)
+
+/* Saved register Callee
+x8 s0/fp Saved register/frame pointer Callee
+x9 s1 Saved register Callee */
+mode SavedCallee (i: card(4))
+  syntax = format("s%d", i)
+
+// Function arguments Caller
+mode FunctionCaller (i: card(3))
+  syntax = format("a%d", i)
+
+mode X (i: card(5)) = XREG [i]
+  syntax = format("%s", if i == 0 then ZERO().syntax
+                        elif i == 1 then RA().syntax
+                        elif i == 2 then SP().syntax
+                        elif i == 3 then GP().syntax
+                        elif i == 4 then TP().syntax
+                        elif i >= 5 && i <= 7 then TemporariesCaller(coerce(card(3), i-5)).syntax
+                        elif i >= 8 && i <= 9 then SavedCallee(coerce(card(4), i-8)).syntax
+                        elif i >= 10 && i <= 17 then FunctionCaller(coerce(card(3), i-10)).syntax
+                        elif i >= 18 && i <= 27 then SavedCallee(coerce(card(4), i-16)).syntax
+                        elif i >= 28 && i <= 31 then TemporariesCaller(coerce(card(3), i-25)).syntax
+                        else "error" endif)
+  image  = format("%5s", i)
+
+#ifdef RV32F
+// FP temporaries Caller
+mode FPTemporariesCaller (i: card(4))
+  syntax = format("ft%d", i)
+
+// FP temporaries Caller
+mode FPSavedCallee (i: card(4))
+  syntax = format("fs%d", i)
+
+/* f10-11 fa0-1 FP arguments/return values Caller
+   f12-17 fa2-7 FP arguments Caller */
+mode FPArgumentsCaller (i: card(3))
+  syntax = format("fa%d", i)
+
+mode F (i: card(5)) = FPR[i]
+  syntax = format("%s", if i >= 0 && i <= 7 then FPTemporariesCaller(coerce(card(4), i)).syntax
+                        elif i >= 8 && i <= 9 then FPSavedCallee(coerce(card(4), i-8)).syntax
+                        elif i >= 10 && i <= 17 then FPArgumentsCaller(coerce(card(3), i-10)).syntax
+                        elif i >= 18 && i <= 27 then FPSavedCallee(coerce(card(4), i-16)).syntax
+                        elif i >= 28 && i <= 31 then FPTemporariesCaller(coerce(card(4), i-20)).syntax
+                        else "error" endif)
+  image  = format("%5s", i)
+#endif
+
+//==================================================================================================
+// Temporary Variables
+//==================================================================================================
+
+// Previous Value of the PC
+var prev_pc [XWORD]
+
+var tmp_address [XWORD]
+var tmp_index [XWORD]
+var tmp_bit [BIT]
+var tmp_byte [BYTE]
+var tmp_half [HWORD]
+var tmp_word [WORD]
+var tmp_dword [DWORD]
+var tmp_dword1 [DWORD]
+var tmp_dword2 [DWORD]
+var tmp_qword [QWORD]
+
+var tmp_int1 [INT]
+var tmp_int2 [INT]
+
+var tmp_long1 [LONG]
+var tmp_long2 [LONG]
+
+var mem_index [card(MEM_SIZE)]
+
+#ifdef RV32F
+  var temp_fps  [FLOAT32]
+  var temp_fps2 [FLOAT32]
+  var temp_fps3 [FLOAT32]
+#endif
+
+#ifdef RV32D
+  var temp_fpd  [FLOAT64]
+  var temp_fpd2 [FLOAT64]
+  var temp_fpd3 [FLOAT64]
+#endif
+
+#ifndef RV32D
+#ifdef RV64F
+  var temp_fpd  [FLOAT64]
+  var temp_fpd2 [FLOAT64]
+  var temp_fpd3 [FLOAT64]
+#endif
+#endif
+
+// Bit Offset in a Word
+#ifdef MEM_SV32
+  var tmp_bit_offset [card(5)]
+#else
+  var tmp_bit_offset [card(6)]
+#endif
+
+// For opcodes
+var opcode_xtype[card(7)]
+var funct3[card(3)]
+var funct7[card(7)]
+
+//==================================================================================================
+// General functions
+//==================================================================================================
+
+/*3.5.2 Supported Access Type PMAs
+Access types specify which access widths, from 8-bit byte to long multi-word burst, are supported,
+and also whether misaligned accesses are supported for each access width.*/
+
+// Include control and status registers (CSRs)
+#include "riscv_csreg.nml"
+
+var rd_var[XWORD]
+
+op load_global(tmp_address_op: XWORD, load_type: card(4), sign_type: BIT)
+  action = {
+#ifdef MEM_SV32
+    mem_index = coerce(card(MEM_SIZE), tmp_address_op >> 2);
+#else
+    mem_index = coerce(card(MEM_SIZE), tmp_address_op >> 3);
+#endif
+
+    if load_type == MEM_BYTE then
+      // MEM_BYTE
+#ifdef MEM_SV32
+      tmp_bit_offset = zero_extend(card(5), tmp_address_op<1..0>) * 8;
+      tmp_byte = MEM[mem_index]<tmp_bit_offset + 7..tmp_bit_offset>;
+#else
+      tmp_bit_offset = zero_extend(card(6), tmp_address_op<2..0>) * 8;
+      tmp_byte = MEM[mem_index]<tmp_bit_offset + 7..tmp_bit_offset>;
+#endif
+      if sign_type == ZERO_EXTEND_VALUE then
+        rd_var = zero_extend(XWORD, tmp_byte);
+      else // sign_type == SIGN_EXTEND_VALUE
+        rd_var = sign_extend(XWORD, tmp_byte);
+      endif;
+
+    elif load_type == MEM_HWORD then
+      // MEM_HWORD
+#ifdef MEM_SV32
+      if tmp_address_op<1..0> != 3 then
+        tmp_bit_offset = zero_extend(card(5), tmp_address_op<1..0>) * 8;
+        tmp_half = MEM[mem_index]<tmp_bit_offset + 15..tmp_bit_offset>;
+      else
+        tmp_half = MEM[mem_index + 1]<7..0> :: MEM[mem_index]<31..24>;
+      endif;
+#else
+      if tmp_address_op<2..0> != 7 then
+        tmp_bit_offset = zero_extend(card(6), tmp_address_op<2..0>) * 8;
+        tmp_half = MEM[mem_index]<tmp_bit_offset + 15..tmp_bit_offset>;
+      else
+        tmp_half = MEM[mem_index + 1]<7..0> :: MEM[mem_index]<63..56>;
+      endif;
+#endif
+      if sign_type == ZERO_EXTEND_VALUE then
+        rd_var = zero_extend(XWORD, tmp_half);
+      else // sign_type == SIGN_EXTEND_VALUE
+        rd_var = sign_extend(XWORD, tmp_half);
+      endif;
+
+    elif load_type == MEM_WORD then
+      // MEM_WORD
+#ifdef MEM_SV32
+      if tmp_address_op<1..0> == 0 then // Word-aligned address
+        tmp_word = MEM[mem_index];
+      elif tmp_address_op<1..0> == 1 then
+        tmp_word = MEM[mem_index + 1]<7..0> :: MEM[mem_index]<31..8>;
+      elif tmp_address_op<1..0> == 2 then
+        tmp_word = MEM[mem_index + 1]<15..0> :: MEM[mem_index]<31..16>;
+      else
+        tmp_word = MEM[mem_index + 1]<23..0> :: MEM[mem_index]<31..24>;
+      endif;
+#else
+      tmp_bit_offset = zero_extend(card(6), tmp_address_op<2..0>) * 8;
+      if tmp_address_op<2..0> < 0b101 then
+        tmp_word = MEM[mem_index]<tmp_bit_offset + 31..tmp_bit_offset>;
+      else
+        tmp_dword1 = MEM[mem_index + 1];
+        tmp_dword2 = MEM[mem_index];
+
+        if tmp_address_op<1..0> == 1 then
+          tmp_word = tmp_dword1<7..0>::tmp_dword2<63..40>;
+        elif tmp_address_op<1..0> == 2 then
+          tmp_word = tmp_dword1<15..0>::tmp_dword2<63..48>;
+        else
+          tmp_word = tmp_dword1<23..0>::tmp_dword2<63..56>;
+        endif;
+      endif;
+#endif
+      if sign_type == ZERO_EXTEND_VALUE then
+        rd_var = zero_extend(XWORD, tmp_word);
+      else // sign_type == SIGN_EXTEND_VALUE
+        rd_var = sign_extend(XWORD, tmp_word);
+      endif;
+
+#ifdef MEM_V64
+    elif load_type == MEM_DWORD then
+      // MEM_DWORD
+      if tmp_address_op<2..0> == 0 then // Word-aligned address
+        tmp_dword = MEM[mem_index];
+      else
+        tmp_dword1 = MEM[mem_index + 1];
+        tmp_dword2 = MEM[mem_index];
+
+        if tmp_address_op<2..0> == 1 then
+          tmp_dword = tmp_dword1<7..0>::tmp_dword2<63..8>;
+        elif tmp_address_op<2..0> == 2 then
+          tmp_dword = tmp_dword1<15..0>::tmp_dword2<63..16>;
+        elif tmp_address_op<2..0> == 3 then
+          tmp_dword = tmp_dword1<23..0>::tmp_dword2<63..24>;
+        elif tmp_address_op<2..0> == 4 then
+          tmp_dword = tmp_dword1<31..0>::tmp_dword2<63..32>;
+        elif tmp_address_op<2..0> == 5 then
+          tmp_dword = tmp_dword1<39..0>::tmp_dword2<63..40>;
+        elif tmp_address_op<2..0> == 6 then
+          tmp_dword = tmp_dword1<47..0>::tmp_dword2<63..48>;
+        else
+          tmp_dword = tmp_dword1<55..0>::tmp_dword2<63..56>;
+        endif;
+      endif;
+
+      rd_var = tmp_dword;
+#endif
+    endif;
+  }
+
+op load_rvi(tmp_address_op: XWORD, rd: X, load_type: card(4), sign_type: BIT)
+  action = {
+    load_global(tmp_address_op, load_type, sign_type).action; // return rd_var
+    rd = rd_var;
+  }
+
+op store_global(tmp_address_op: XWORD, rs2_op: XWORD, store_type: card(4))
+  action = {
+#ifdef MEM_SV32
+    mem_index = coerce(card(MEM_SIZE), tmp_address_op >> 2);
+#else
+    mem_index = coerce(card(MEM_SIZE), tmp_address_op >> 3);
+#endif
+
+    if store_type == MEM_BYTE then
+#ifdef MEM_SV32
+      tmp_bit_offset = zero_extend(card(5), tmp_address_op<1..0>) * 8;
+      tmp_word = MEM[mem_index];
+      tmp_word<tmp_bit_offset + 7..tmp_bit_offset> = rs2_op<7..0>;
+      MEM[mem_index] = tmp_word;
+#else
+      tmp_bit_offset = zero_extend(card(6), tmp_address_op<2..0>) * 8;
+      tmp_dword = MEM[mem_index];
+      tmp_dword<tmp_bit_offset + 7..tmp_bit_offset> = rs2_op<7..0>;
+      MEM[mem_index] = tmp_dword;
+#endif
+
+    elif store_type == MEM_HWORD then
+    // MEM_HWORD
+#ifdef MEM_SV32
+      if tmp_address_op<1..0> != 3 then
+        tmp_bit_offset = zero_extend(card(5), tmp_address_op<1..0>) * 8;
+        tmp_word = MEM[mem_index];
+        tmp_word<tmp_bit_offset + 15..tmp_bit_offset> = rs2_op<15..0>;
+        MEM[mem_index] = tmp_word;
+      else
+        tmp_word = MEM[mem_index + 1];
+        tmp_word<7..0> :: MEM[mem_index]<31..24> = rs2_op<15..0>;
+        MEM[mem_index + 1] = tmp_word;
+      endif;
+#else
+      if tmp_address_op<2..0> != 7 then
+        tmp_bit_offset = zero_extend(card(6), tmp_address_op<2..0>) * 8;
+        tmp_dword = MEM[mem_index];
+        tmp_dword<tmp_bit_offset + 15..tmp_bit_offset> = rs2_op<15..0>;
+        MEM[mem_index] = tmp_dword;
+      else
+        tmp_qword = MEM[mem_index + 1]::MEM[mem_index];
+        tmp_qword<71..56> = rs2_op<15..0>;
+        MEM[mem_index + 1]::MEM[mem_index] = tmp_qword;
+      endif;
+#endif
+
+    elif store_type == MEM_WORD then
+    // MEM_WORD
+#ifdef MEM_SV32
+      if tmp_address_op<1..0> == 0 then // Word-aligned address
+        MEM[mem_index] = rs2_op<31..0>;
+      elif tmp_address_op<1..0> == 1 then
+        MEM[mem_index + 1]<7..0> ::
+        MEM[mem_index]<31..8> = rs2_op<31..0>;
+      elif tmp_address_op<1..0> == 2 then
+        MEM[mem_index + 1]<15..0> ::
+        MEM[mem_index]<31..16> = rs2_op<31..0>;
+      else
+        MEM[mem_index + 1]<23..0> ::
+        MEM[mem_index]<31..24> = rs2_op<31..0>;
+      endif;
+#else
+      tmp_bit_offset = zero_extend(card(6), tmp_address_op<2..0>) * 8;
+      if tmp_address_op<2..0> < 0b101 then
+        tmp_dword = MEM[mem_index];
+        tmp_dword<tmp_bit_offset + 31..tmp_bit_offset> = rs2_op<31..0>;
+        MEM[mem_index] = tmp_dword;
+      else
+        tmp_dword1 = MEM[mem_index + 1];
+        tmp_dword2 = MEM[mem_index];
+        if tmp_address_op<1..0> == 1 then
+          tmp_dword1<7..0>::tmp_dword2<63..40> = rs2_op<31..0>;
+        elif tmp_address_op<1..0> == 2 then
+          tmp_dword1<15..0>::tmp_dword2<63..48> = rs2_op<31..0>;
+        else
+          tmp_dword1<23..0>::tmp_dword2<63..56> = rs2_op<31..0>;
+        endif;
+        MEM[mem_index + 1] = tmp_dword1;
+        MEM[mem_index] = tmp_dword2;
+      endif;
+#endif
+
+#ifdef MEM_V64
+    elif store_type == MEM_DWORD then
+      // MEM_DWORD
+      if tmp_address_op<2..0> == 0 then // Word-aligned address
+        MEM[mem_index] = rs2_op;
+      else
+        tmp_dword1 = MEM[mem_index + 1];
+        tmp_dword2 = MEM[mem_index];
+
+        if tmp_address_op<2..0> == 1 then
+          tmp_dword1<7..0>::tmp_dword2<63..8> = rs2_op;
+        elif tmp_address_op<2..0> == 2 then
+          tmp_dword1<15..0>::tmp_dword2<63..16> = rs2_op;
+        elif tmp_address_op<2..0> == 3 then
+          tmp_dword1<23..0>::tmp_dword2<63..24> = rs2_op;
+        elif tmp_address_op<2..0> == 4 then
+          tmp_dword1<31..0>::tmp_dword2<63..32> = rs2_op;
+        elif tmp_address_op<2..0> == 5 then
+          tmp_dword1<39..0>::tmp_dword2<63..40> = rs2_op;
+        elif tmp_address_op<2..0> == 6 then
+          tmp_dword1<47..0>::tmp_dword2<63..48> = rs2_op;
+        else
+          tmp_dword1<55..0>::tmp_dword2<63..56> = rs2_op;
+        endif;
+
+        MEM[mem_index + 1] = tmp_dword1;
+        MEM[mem_index] = tmp_dword2;
+      endif;
+#endif
+    endif;
+  }
+
+var rs2_var[XWORD]
+
+op store_rvi(tmp_address_op: XWORD, rs2: X, store_type: card(4))
+  action = {
+    rs2_var = rs2;
+    store_global(tmp_address_op, rs2_var, store_type).action;
+  }
+
+#ifdef RV32A
+  #define LOAD_STORE_MEM
+#endif
+
+#ifdef RV32F
+  #define LOAD_STORE_MEM
+  #define ROUNDING_MODE_ON
+#endif
+
+#ifdef LOAD_STORE_MEM
+var temp_address_load[DWORD]
+var temp_address_tail[card(2)]
+
+internal op check_aligned(op_type: card(4), address: XWORD)
+  action = {
+    if (op_type == MEM_DWORD && address<2..0> != 0) ||
+       (op_type == MEM_WORD && address<1..0> != 0) ||
+       (op_type == MEM_HWORD && address<0> != 0) then
+      trace("For best performance, the effective address for all loads and stores should be");
+      trace("naturally aligned for each data type");
+      trace("address(check_aligned): 0x%x", address);
+      exception("Address Error: rv32a");
+      tmp_bit = 1;
+    endif;
+  }
+
+var load_value[XWORD]
+
+internal op load_data(op_type: card(4), address: XWORD)
+  action = {
+    tmp_bit = 0;
+    check_aligned(op_type, address).action;
+    if tmp_bit != 1 then
+      load_global(address, op_type, ZERO_EXTEND_VALUE).action; // return rd_var
+      load_value = rd_var;
+    endif;
+  }
+
+internal op store_data(op_type: card(4), address: XWORD, store_value: XWORD)
+  action = {
+    tmp_bit = 0;
+    check_aligned(op_type, address).action;
+
+    mem_index = coerce(card(MEM_SIZE), address >> 2);
+
+    if tmp_bit != 1 then
+      store_global(address, store_value, op_type).action;
+    endif;
+  }
+#endif
+
+//==================================================================================================
+// Internal Operation to Handle Exceptions
+//==================================================================================================
+let PC_SERIALIZE_BEFORE = 3
+let PC_SERIALIZE_AFTER = 5
+let PC_SERIALIZE_WFI = 7
+
+let DCSR_CAUSE_SWBP = 1
+
+let DEBUG_ROM_ENTRY = 0x800
+let DEBUG_ROM_TVEC = 0x808
+
+let CAUSE_MISALIGNED_FETCH = 0x0
+let CAUSE_FETCH_ACCESS = 0x1
+let CAUSE_ILLEGAL_INSTRUCTION = 0x2
+let CAUSE_BREAKPOINT = 0x3
+let CAUSE_MISALIGNED_LOAD = 0x4
+let CAUSE_LOAD_ACCESS = 0x5
+let CAUSE_MISALIGNED_STORE = 0x6
+let CAUSE_STORE_ACCESS = 0x7
+let CAUSE_USER_ECALL = 0x8
+let CAUSE_SUPERVISOR_ECALL = 0x9
+let CAUSE_HYPERVISOR_ECALL = 0xa
+let CAUSE_MACHINE_ECALL = 0xb
+let CAUSE_FETCH_PAGE_FAULT = 0xc
+let CAUSE_LOAD_PAGE_FAULT = 0xd
+let CAUSE_STORE_PAGE_FAULT = 0xf
+
+let PRIVILEGE_MODE_U = 0
+let PRIVILEGE_MODE_S = 1
+let PRIVILEGE_MODE_M = 3
+
+let PRV_U = 0
+let PRV_S = 1
+let PRV_H = 2
+let PRV_M = 3
+
+reg t_cause[CSR_TYPE]
+reg t_get_tval[CSR_TYPE] // TODO: for mem
+
+reg privilege_mode[card(2)]
+
+//var alias to reg_t [CSR_TYPE]
+var bit [CSR_TYPE]
+var deleg [CSR_TYPE]
+var interrupt [BIT]
+var epc [CSR_TYPE]
+var vector [CSR_TYPE]
+
+internal op set_privilege(prv_op: card(2))
+action = {
+  // set_privilege(PRV_x);
+    // TODO: mmu->flush_tlb();
+    // state.prv = legalize_privilege(prv);
+  assert(prv_op <= PRV_M, "exception (set_privilege): prv_op > PRV_M");
+  if MISA_U == 0 then
+    PRV = PRV_M;
+  elif prv_op == PRV_H || MISA_S == 0 then
+    PRV = PRV_U;
+  else
+    PRV = prv_op;
+  endif;
+}
+
+internal op exception()
+action = {
+  epc = PC;
+
+  if DCSR_CAUSE != 0 then
+    if t_cause == CAUSE_BREAKPOINT then
+      PC = DEBUG_ROM_ENTRY;
+    else
+      PC = DEBUG_ROM_TVEC;
+    endif;
+    // return;
+  else
+    if (t_cause == CAUSE_BREAKPOINT && (
+         (PRV == PRV_M && DCSR_EBREAKM == 1) ||
+         (PRV == PRV_S && DCSR_EBREAKS == 1) ||
+         (PRV == PRV_U && DCSR_EBREAKU == 1))) then
+      //enter_debug_mode(DCSR_CAUSE_SWBP);
+      DCSR_CAUSE = DCSR_CAUSE_SWBP;
+      DCSR_PRV = PRV;
+
+      // set_privilege(PRV_M);
+      set_privilege(PRV_M).action;
+
+      DPC_CSR = PC;
+      PC = DEBUG_ROM_ENTRY;
+      //return;
+    else
+      bit = t_cause;
+      deleg = MEDELEG_CSR;
+      if (bit & (1 << (XLEN-1))) != 0 then
+        interrupt = 1;
+      else
+        interrupt = 0;
+      endif;
+      if interrupt == 1 then
+        //TODO deleg = state.mideleg, bit &= ~((reg_t)1 << (max_xlen-1));
+        deleg = MEDELEG_CSR;
+        //bit &= ~((reg_t)1 << (max_xlen-1));
+        bit = bit & ~(coerce(CSR_TYPE, 1) << (XLEN-1));
+      endif;
+
+      if (PRV <= PRV_S && bit < XLEN && ((deleg >> bit) & coerce(card(XLEN), 1)) != 0) then
+        // handle the trap in S-mode
+        //state.pc = state.stvec;
+        PC = STVEC_CSR;
+        //state.scause = t.cause();
+        SCAUSE_CSR = t_cause;
+        //state.sepc = epc;
+        SEPC_CSR = epc;
+        //state.stval = t.get_tval();
+        STVAL_CSR = t_get_tval;
+
+        //state.mstatus;
+        MSTATUS_SPIE = MSTATUS_SIE;
+        MSTATUS_SPP = coerce(BIT, PRV[0]);
+        MSTATUS_SIE = 0;
+
+        //set_privilege(PRV_S);
+        set_privilege(PRV_S).action;
+      else
+        // reg_t vector = (state.mtvec & 1) && interrupt ? 4*bit : 0;
+        if (MTVEC_CSR & coerce(CSR_TYPE, 1)) == 1 && interrupt == 1 then
+         vector = 4*bit;
+        else
+         vector = 0;
+        endif;
+
+        //state.pc = (state.mtvec & ~(reg_t)1) + vector;
+        PC = (MTVEC_CSR & sign_extend(CSR_TYPE, -1)) + vector;
+        //state.mepc = epc;
+        MEPC_CSR = epc;
+        //state.mcause = t.cause();
+        MCAUSE_CSR = t_cause;
+        //state.mtval = t.get_tval();
+        MTVAL_CSR = t_get_tval;
+
+        //reg_t s = state.mstatus;
+        MSTATUS_MPIE = MSTATUS_MIE;
+        MSTATUS_MPP = PRV;
+        MSTATUS_MIE = 0;
+
+        // set_privilege(PRV_M);
+        set_privilege(PRV_M).action;
+      endif;
+
+    endif;
+  endif;
+}
+
+//==================================================================================================
+// General FP functions
+//==================================================================================================
+
+internal op process_float_exception_flags()
+  action = {
+    tmp_word = float_exception_flags;
+    FFLAGS_EXCEP = tmp_word<4..0>;
+    FCSR_EXCEP = tmp_word<4..0>;
+    //FFLAGS_NX = tmp_word<0>;
+    //trace ("float_exception_flags: %x", tmp_word);
+    float_exception_flags = 0;
+  }
+
+//reg FFLAGS_EXCEP[card(5)] alias = FFLAGS_CSR<4..0> //TODO: BUG (riscv_rv32i_sys.nml)
+//reg FCSR_EXCEP[card(5)] alias = FCSR_CSR<4..0>
+
+#ifdef ROUNDING_MODE_ON
+var RoundingMode [card(3)] // TODO:
+
+//Round to Nearest, ties to Even
+let RM_RNE = 0b000
+// 001 RTZ Round towards Zero
+let RM_RTZ = 0b001
+// 010 RDN Round Down (towards -infinity)
+let RM_RDN = 0b010
+// 011 RUP Round Up (towards +infinity)
+let RM_RUP = 0b011
+// 100 RMM Round to Nearest, ties to Max Magnitude
+let RM_RMM = 0b100
+
+// ==========================
+// Set SoftFloat rounding mode
+internal op setSFRoundingMode(rmode: card(3))
+action = {
+  if rmode == coerce(card(3), RM_RNE) then
+    float_rounding_mode = coerce(WORD, 0);
+  elif rmode == coerce(card(3), RM_RTZ) then
+    float_rounding_mode = coerce(WORD, 3);
+  elif rmode == coerce(card(3), RM_RDN) then
+    float_rounding_mode = coerce(WORD, 2);
+  elif rmode == coerce(card(3), RM_RUP) then
+    float_rounding_mode = coerce(WORD, 1);
+  elif rmode == coerce(card(3), RM_RMM) then
+    float_rounding_mode = coerce(WORD, 4);
+  endif;
+}
+
+// FP RoundingMode operations
+internal op setFPRoundingMode(rmode: card(3))
+action = {
+  setSFRoundingMode(rmode).action;
+  FCSR_FRM = rmode;
+  FRM_FRM = rmode;
+}
+#endif
+
+//==================================================================================================
+// Instructions
+//==================================================================================================
+
+#include "riscv_rv32i.nml"
+#include "riscv_rv32i_sys.nml"
+
+#ifdef RV32M
+  #include "riscv_rv32m.nml"
+#endif
+
+#ifdef RV32A
+  #include "riscv_rv32a.nml"
+#endif
+
+#ifdef RV32F
+  #include "riscv_rv32f.nml"
+#endif
+
+#ifdef RV64I
+  #include "riscv_rv64i.nml"
+#endif
+
+#ifdef RV64M
+  #include "riscv_rv64m.nml"
+#endif
+
+#ifdef RV64A
+  #include "riscv_rv64a.nml"
+#endif
+
+#ifdef RV64F
+  #include "riscv_rv64f.nml"
+#endif
+
+#ifdef RV32D
+  #include "riscv_rv32d.nml"
+#endif
+
+#ifdef RV64D
+  #include "riscv_rv64d.nml"
+#endif
+
+#ifdef RV32V
+  #include "riscv_rv32v.nml"
+#endif
+
+#ifdef RV32C
+  #include "riscv_rvc.nml"
+#endif
+
+op Op =             rv32i // 37 + 16
+      |             rv32i_sys // 10 + 20
+      | @rev(RV32M) rv32m // 8
+      | @rev(RV32A) rv32a // 11
+      | @rev(RV32F) rv32f // 26 + 3
+      | @rev(RV32D) rv32d // 26 + 3
+      | @rev(RV32V) rv32v // v56
+      | @rev(RV64I) rv64i // 12
+      | @rev(RV64M) rv64m // 5
+      | @rev(RV64A) rv64a // 11
+      | @rev(RV64F) rv64f // 4
+      | @rev(RV64D) rv64d // 6
+
+@rev(RV32C)
+op Op16 =           rvc // 28/49
+// Pseudo +15
+// Total: (47+77+32)+(36+3+3)+15 + v56 = 213 + (v56)
+
+op instruction(operation: Op)
+  syntax = operation.syntax
+  image  = operation.image
+  action = {
+    XREG[0] = 0;
+    prev_pc = PC;
+
+    operation.action;
+    if PC == prev_pc then
+      PC = PC + 4;
+    endif;
+  }
+
+@rev(RV32C)
+op instruction16(operation: Op16)
+  syntax = operation.syntax
+  image  = operation.image
+  action = {
+    XREG[0] = 0;
+    prev_pc = PC;
+
+    operation.action;
+    if PC == prev_pc then
+      PC = PC + 2;
+    endif;
+  }
+
+//==================================================================================================
+// Special pseudoinstructions
+//==================================================================================================
+
+#include "riscv_pseudo.nml"
+
+//==================================================================================================
+// The End
+//==================================================================================================

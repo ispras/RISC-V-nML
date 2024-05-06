@@ -1,0 +1,151 @@
+/*
+ * Copyright 2017-2019 ISP RAS (http://www.ispras.ru)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+#ifndef RISCV_RV64M_INCLUDED
+#define RISCV_RV64M_INCLUDED
+
+//==================================================================================================
+// RV64M Standard Extension (in addition to RV32M)
+//==================================================================================================
+
+/*
+  Instructions (number: 5):
+    MULW +
+    DIVW +
+    DIVUW +
+    REMW +
+    REMUW +
+*/
+
+//==================================================================================================
+// Temporary Variables
+//==================================================================================================
+
+// Stores multiplication result
+var tmp_rv64m[XWORD]
+
+//==================================================================================================
+// Instructions
+//==================================================================================================
+
+/*
+  MULW (R-type)
+
+  Format: mulw rd, rs1, rs2
+
+  MULW is only valid for RV64, and multiplies the lower 32 bits of the source registers,
+  placing the sign-extension of the lower 32 bits of the result into the destination register.
+  MULW can be used to obtain the upper 32 bits of the 64-bit product, but signed arguments must
+  be proper 32-bit signed values, whereas unsigned arguments must have their upper 32 bits clear.
+*/
+op mulw(rd: X, rs1: X, rs2: X)
+  syntax = format("mulw %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000001%s%s000%s0111011", rs2.image, rs1.image, rd.image)
+  action = {
+    tmp_rv64m = zero_extend(XWORD, rs1<31..0>) * zero_extend(XWORD, rs2<31..0>);
+    rd = sign_extend(XWORD, tmp_rv64m<31..0>);
+  }
+
+/*
+  DIVW (R-type)
+  DIVUW (R-type)
+  REMW (R-type)
+  REMUW (R-type)
+
+  Format: divw rd, rs1, rs2
+          divuw rd, rs1, rs2
+          remw rd, rs1, rs2
+          remuw rd, rs1, rs2
+
+  DIVW and DIVUW instructions are only valid for RV64, and divide the lower 32 bits of rs1 by
+  the lower 32 bits of rs2, treating them as signed and unsigned integers respectively, placing
+  the 32-bit quotient in rd, sign-extended to 64 bits.
+
+  REMW and REMUW instructions are only valid for RV64, and provide the corresponding signed
+  and unsigned remainder operations respectively. Both REMW and REMUW sign-extend the 32-bit
+  result to 64 bits.
+
+  Signed division overflow occurs only when the most-negative integer, −2**(XLEN−1), is divided
+  by −1. The quotient of signed division overflow is equal to the dividend, and the remainder is
+  zero. Unsigned division overflow cannot occur.
+
+  | Condition              |  Dividend  | Divisor ||     DIVU    | REMU |      DIV     |  REM  |
+  | Division by zero       |      x     |    0    || 2**XLEN − 1 |   x  |      -1      |   x   |
+  | Overflow (signed only) |−2**(XLEN−1)|   -1    ||      -      |   -  | −2**(XLEN−1) |   0   |
+*/
+op divw(rd: X, rs1: X, rs2: X)
+  syntax = format("divw %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000001%s%s100%s0111011", rs2.image, rs1.image, rd.image)
+  action = {
+    if rs2<31..0> == 0 then
+      rd = -1;
+    elif rs1<31..0> == 1 << 31 && rs2<31..0> == -1 then
+      rd = sign_extend(XWORD, rs1<31..0>);
+    else
+      rd = sign_extend(XWORD, cast(INT, rs1<31..0>) / cast(INT, rs2<31..0>));
+    endif;
+  }
+
+op divuw(rd: X, rs1: X, rs2: X)
+  syntax = format("divuw %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000001%s%s101%s0111011", rs2.image, rs1.image, rd.image)
+  action = {
+    if rs2<31..0> == 0 then
+      rd = (1 << XLEN) - 1;
+    else
+      rd = sign_extend(XWORD, cast(WORD, rs1<31..0>) / cast(WORD, rs2<31..0>));
+    endif;
+  }
+
+op remw(rd: X, rs1: X, rs2: X)
+  syntax = format("remw %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000001%s%s110%s0111011", rs2.image, rs1.image, rd.image)
+  action = {
+    if rs2<31..0> == 0 then
+      rd = sign_extend(XWORD, rs1<31..0>);
+    elif rs1<31..0> == 1 << 31 && rs2<31..0> == -1 then
+      rd = 0;
+    else
+      rd = sign_extend(XWORD, cast(INT, rs1<31..0>) % cast(INT, rs2<31..0>));
+    endif;
+  }
+
+op remuw(rd: X, rs1: X, rs2: X)
+  syntax = format("remuw %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000001%s%s111%s0111011", rs2.image, rs1.image, rd.image)
+  action = {
+    if rs2<31..0> == 0 then
+      rd = sign_extend(XWORD, rs1<31..0>);
+    else
+      rd = sign_extend(XWORD, cast(WORD, rs1<31..0>) % cast(WORD, rs2<31..0>));
+    endif;
+  }
+
+//==================================================================================================
+// Instruction Groups
+//==================================================================================================
+
+op rv64m = mulw
+         | divw
+         | divuw
+         | remw
+         | remuw
+
+//==================================================================================================
+// The End
+//==================================================================================================
+
+#endif

@@ -1,0 +1,502 @@
+/*
+ * Copyright 2017-2019 ISP RAS (http://www.ispras.ru)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+#ifndef RISCV_RV32D_INCLUDED
+#define RISCV_RV32D_INCLUDED
+
+//==================================================================================================
+// RV32D Standard Extension
+//==================================================================================================
+
+/*  FLD +
+    FSD +
+    FMADD.D +
+    FMSUB.D +
+    FNMSUB.D +
+    FNMADD.D +
+    FADD.D +
+    FSUB.D +
+    FMUL.D +
+    FDIV.D +
+    FSQRT.D +
+    FSGNJ.D +
+    FSGNJN.D +
+    FSGNJX.D +
+    FMIN.D +
+    FMAX.D +
+    FCVT.S.D +
+    FCVT.D.S +
+    FEQ.D +
+    FLT.D +
+    FLE.D +
+    FCLASS.D +
+    FCVT.W.D +
+    FCVT.WU.D +
+    FCVT.D.W +
+    FCVT.D.WU +
+*/
+
+op fld(rd: F, rs1: X, imm: int(12))
+  syntax = format("fld %s, %d(%s)", rd.syntax, imm, rs1.syntax)
+  image  = format("%12s%s011%s0000111", imm, rs1.image, rd.image)
+  action = {
+    tmp_address = rs1 + sign_extend(XWORD, imm);
+    load_data(MEM_DWORD, tmp_address).action; // return load_value
+    rd = 0;
+    rd = load_value;
+  }
+
+op fsd(rs2: F, rs1: X, imm: int(12))
+  syntax = format("fsd %s, %d(%s)", rs2.syntax, imm, rs1.syntax)
+  image  = format("%7s%5s%5s011%5s0100111", imm<11..5>, rs2.image, rs1.image, imm<4..0>)
+  action = {
+    tmp_address = rs1 + sign_extend(XWORD, imm);
+    store_data(MEM_DWORD, tmp_address, rs2<(XLEN-1)..0>).action;
+  }
+
+op fadd_d(rd: F, rs1: F, rs2: F)
+  syntax = format("fadd.d %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000001%s%s%3s%s1010011", rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    temp_fpd = rs1;
+    temp_fpd2 = rs2;
+    rd = 0;
+    temp_fpd3 = temp_fpd + temp_fpd2;
+    rd<63..0> = temp_fpd3<63..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fsub_d(rd: F, rs1: F, rs2: F)
+  syntax = format("fsub.d %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0000101%s%s%3s%s1010011", rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    temp_fpd = cast(FLOAT64, rs1<63..0>) - cast(FLOAT64, rs2<63..0>);
+    rd = 0;
+    rd<63..0> = temp_fpd<63..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fmul_d(rd: F, rs1: F, rs2: F)
+  syntax = format("fmul.d %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0001001%s%s%3s%s1010011", rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    temp_fpd = cast(FLOAT64, rs1<63..0>) * cast(FLOAT64, rs2<63..0>);
+    rd = 0;
+    rd<63..0> = temp_fpd<63..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fdiv_d(rd: F, rs1: F, rs2: F)
+  syntax = format("fdiv.d %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0001101%5s%5s%3s%5s1010011", rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    temp_fpd = cast(FLOAT64, rs1<63..0>) * cast(FLOAT64, rs2<63..0>);
+    rd = 0;
+    rd<63..0> = temp_fpd<63..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fmin_d(rd: F, rs1: F, rs2: F)
+  syntax = format("fmin.d %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0010101%5s%5s%3s%5s1010011", rs2.image, rs1.image, "000", rd.image)
+  action = {
+    //RoundingMode = RM_RNE;
+    temp_fpd = cast(FLOAT64, rs1<63..0>);
+    temp_fpd2 = cast(FLOAT64, rs2<63..0>);
+    rd = 0;
+    if temp_fpd < temp_fpd2 then
+      rd<63..0> = temp_fpd<63..0>;
+    else
+      rd<63..0> = temp_fpd2<63..0>;
+    endif;
+
+    process_float_exception_flags().action;
+  }
+
+op fmax_d(rd: F, rs1: F, rs2: F)
+  syntax = format("fmax.d %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0010101%5s%5s%3s%5s1010011", rs2.image, rs1.image, "001", rd.image)
+  action = {
+    //RoundingMode = RM_RTZ;
+    temp_fpd = cast(FLOAT64, rs1<63..0>);
+    temp_fpd2 = cast(FLOAT64, rs2<63..0>);
+    rd = 0;
+    if temp_fpd > temp_fpd2 then
+      rd<63..0> = temp_fpd<63..0>;
+    else
+      rd<63..0> = temp_fpd2<63..0>;
+    endif;
+
+    process_float_exception_flags().action;
+  }
+
+op fsqrt_d(rd: F, rs1: F)
+  syntax = format("fsqrt.d %s, %s", rd.syntax, rs1.syntax)
+  image  = format("0101101%5s%5s%3s%5s1010011", "00000", rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    temp_fpd = sqrt(cast(FLOAT64, rs1<63..0>));
+    rd = 0;
+    rd<63..0> = temp_fpd<63..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fsgnj_d(rd: F, rs1: F, rs2: F)
+  syntax = format("fsgnj.d %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0010001%5s%5s%3s%5s1010011", rs2.image, rs1.image, "000", rd.image)
+  action = {
+    temp_fpd<30..0> = rs1<30..0>;
+    temp_fpd<31> = rs2<31>;
+    rd = 0;
+    rd<63..0> = temp_fpd<63..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fsgnjn_d(rd: F, rs1: F, rs2: F)
+  syntax = format("fsgnjn.d %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0010001%5s%5s%3s%5s1010011", rs2.image, rs1.image, "001", rd.image)
+  action = {
+    temp_fpd<30..0> = rs1<30..0>;
+    temp_fpd<31> = ~rs2<31>;
+    rd = 0;
+    rd<63..0> = temp_fpd<63..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fsgnjx_d(rd: F, rs1: F, rs2: F)
+  syntax = format("fsgnjx.d %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("0010001%5s%5s%3s%5s1010011", rs2.image, rs1.image, "010", rd.image)
+  action = {
+    temp_fpd<30..0> = rs1<30..0>;
+    temp_fpd<31> = rs1<31> ^ rs2<31>;
+    rd = 0;
+    rd<63..0> = temp_fpd<63..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fmadd_d(rd: F, rs1: F, rs2: F, rs3: F)
+  syntax = format("fmadd.d %s, %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax, rs3.syntax)
+  image  = format("%5s01%5s%5s%3s%5s1000011", rs3.image, rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    temp_fpd = cast(FLOAT64, rs1<63..0>) * cast(FLOAT64, rs2<63..0>) + cast(FLOAT64, rs3<63..0>);
+    rd = 0;
+    rd<63..0> = temp_fpd<63..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fmsub_d(rd: F, rs1: F, rs2: F, rs3: F)
+  syntax = format("fmsub.d %s, %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax, rs3.syntax)
+  image  = format("%5s01%5s%5s%3s%5s1000111", rs3.image, rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    temp_fpd = cast(FLOAT64, rs1<63..0>) * cast(FLOAT64, rs2<63..0>) - cast(FLOAT64, rs3<63..0>);
+    rd = 0;
+    rd<63..0> = temp_fpd<63..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fnmadd_d(rd: F, rs1: F, rs2: F, rs3: F)
+  syntax = format("fnmadd.d %s, %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax, rs3.syntax)
+  image  = format("%5s01%5s%5s%3s%5s1001111", rs3.image, rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    tmp_int1 = -1;
+    temp_fpd2 = int_to_float(FLOAT64, tmp_int1);
+    temp_fpd = temp_fpd2 * cast(FLOAT64, rs1<63..0>) *
+               cast(FLOAT64, rs2<63..0>) + cast(FLOAT64, rs3<63..0>);
+    rd = 0;
+    rd<63..0> = temp_fpd<63..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fnmsub_d(rd: F, rs1: F, rs2: F, rs3: F)
+  syntax = format("fnmsub.d %s, %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax, rs3.syntax)
+  image  = format("%5s01%5s%5s%3s%5s1001011", rs3.image, rs2.image, rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    tmp_int1 = -1;
+    temp_fpd2 = int_to_float(FLOAT64, tmp_int1);
+    temp_fpd = temp_fpd2 * cast(FLOAT64, rs1<63..0>) *
+               cast(FLOAT64, rs2<63..0>) - cast(FLOAT64, rs3<63..0>);
+    rd = 0;
+    rd<63..0> = temp_fpd<63..0>;
+
+    process_float_exception_flags().action;
+  }
+
+op fcvt_w_d(rd: X, rs1: F, op_round_mod: card(3))
+  syntax = format("fcvt.w.d %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1100001%5s%5s%3s%5s1010011", "00000", rs1.image, op_round_mod, rd.image)
+  action = {
+    //coerce(card(3), RM_RNE)
+    tmp_ui3 = float_rounding_mode;
+    setSFRoundingMode(op_round_mod).action;
+
+    rd = 0;
+    tmp_word = float_to_int(WORD, cast(FLOAT64, rs1<63..0>));
+    rd = sign_extend(XWORD, tmp_word);
+
+    float_rounding_mode = tmp_ui3; // return the original value
+
+    process_float_exception_flags().action;
+  }
+
+op fcvt_w_d2(rd: X, rs1: F)
+  syntax = format("%s", fcvt_w_d(rd, rs1, coerce(card(3), RM_RTZ)).syntax)
+  image  = format("%32s", fcvt_w_d(rd, rs1, coerce(card(3), RM_RTZ)).image)
+  action = {
+    fcvt_w_d(rd, rs1, coerce(card(3), RM_RTZ)).action;
+  }
+
+op fcvt_wu_d(rd: X, rs1: F, op_round_mod: card(3))
+  syntax = format("fcvt.wu.d %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1100001%5s%5s%3s%5s1010011", "00001", rs1.image, op_round_mod, rd.image)
+  action = {
+    //coerce(card(3), RM_RNE)
+    tmp_ui3 = float_rounding_mode;
+    setSFRoundingMode(op_round_mod).action;
+
+    fcvt_w_d(rd, rs1, coerce(card(3), RM_RNE)).action; // TODO
+
+    float_rounding_mode = tmp_ui3; // return the original value
+
+    process_float_exception_flags().action;
+  }
+
+op fcvt_wu_d2(rd: X, rs1: F)
+  syntax = format("%s", fcvt_wu_d(rd, rs1, coerce(card(3), RM_RTZ)).syntax)
+  image  = format("%32s", fcvt_wu_d(rd, rs1, coerce(card(3), RM_RTZ)).image)
+  action = {
+    fcvt_wu_d(rd, rs1, coerce(card(3), RM_RTZ)).action;
+  }
+
+op fcvt_d_w(rd: F, rs1: X)
+  syntax = format("fcvt.d.w %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1101001%5s%5s%3s%5s1010011", "00000", rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    rd = 0;
+    rd<63..0> = int_to_float(FLOAT64, rs1<31..0>);
+  }
+
+op fcvt_d_wu(rd: F, rs1: X)
+  syntax = format("fcvt.d.wu %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1101001%5s%5s%3s%5s1010011", "00001", rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    fcvt_d_w(rd, rs1).action;
+    // TODO:
+  }
+
+op fcvt_s_d(rd: F, rs1: F)
+  syntax = format("fcvt.s.d %s, %s", rd.syntax, rs1.syntax)
+  image  = format("0100000%5s%5s%3s%5s1010011", "00001", rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    rd = 0;
+    temp_fpd = cast(FLOAT64, rs1<63..0>);
+    rd<31..0> = float_to_float(FLOAT32, temp_fpd);
+  }
+
+op fcvt_d_s(rd: F, rs1: F)
+  syntax = format("fcvt.d.s %s, %s", rd.syntax, rs1.syntax)
+  image  = format("0100000%5s%5s%3s%5s1010011", "00000", rs1.image, coerce(card(3), RM_RNE), rd.image)
+  action = {
+    rd = 0;
+    temp_fps = cast(FLOAT32, rs1<31..0>);
+    rd<63..0> = float_to_float(FLOAT64, temp_fps);
+  }
+
+/*  Floating-point compare instructions perform the specified comparison (equal, less than, or less
+  than or equal) between floating-point registers rs1 and rs2 and record the Boolean result in
+  integer register rd. */
+op feq_d(rd: X, rs1: F, rs2: F)
+  syntax = format("feq.d %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("1010001%5s%5s%3s%5s1010011", rs2.image, rs1.image, "010", rd.image)
+  action = {
+    temp_fpd = cast(FLOAT64, rs1<63..0>);
+    temp_fpd2 = cast(FLOAT64, rs2<63..0>);
+
+    rd = 0;
+    if is_nan(temp_fpd) && is_nan(temp_fpd2) then
+      rd = 0;
+    elif temp_fpd == temp_fpd2 then
+      rd = 1;
+    endif;
+
+    // TODO: jSoftFloat
+    if is_signaling_nan(temp_fpd) && is_signaling_nan(temp_fpd2) then
+      FFLAGS_EXCEP<4> = 0b1;
+      FCSR_EXCEP<4> = 0b1;
+    else
+      process_float_exception_flags().action;
+    endif;
+  }
+
+op flt_d(rd: X, rs1: F, rs2: F)
+  syntax = format("flt.d %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("1010001%5s%5s%3s%5s1010011", rs2.image, rs1.image, "001", rd.image)
+  action = {
+    temp_fpd = cast(FLOAT64, rs1<63..0>);
+    temp_fpd2 = cast(FLOAT64, rs2<63..0>);
+
+    rd = 0;
+    if temp_fpd < temp_fpd2 then
+      rd = 1;
+    endif;
+
+    // TODO: jSoftFloat
+    if is_nan(temp_fpd) && is_nan(temp_fpd2) then
+      FFLAGS_EXCEP<4> = 0b1;
+      FCSR_EXCEP<4> = 0b1;
+    else
+      process_float_exception_flags().action;
+    endif;
+  }
+
+op fle_d(rd: X, rs1: F, rs2: F)
+  syntax = format("fle.d %s, %s, %s", rd.syntax, rs1.syntax, rs2.syntax)
+  image  = format("1010001%5s%5s%3s%5s1010011", rs2.image, rs1.image, "000", rd.image)
+  action = {
+    temp_fpd = cast(FLOAT64, rs1<63..0>);
+    temp_fpd2 = cast(FLOAT64, rs2<63..0>);
+
+    rd = 0;
+    if temp_fpd <= temp_fpd2 then
+      rd = 1;
+    endif;
+
+    // TODO: jSoftFloat
+    if is_nan(temp_fpd) && is_nan(temp_fpd2) then
+      FFLAGS_EXCEP<4> = 0b1;
+      FCSR_EXCEP<4> = 0b1;
+    else
+      process_float_exception_flags().action;
+    endif;
+  }
+
+/*TODO:
+    0 rs1 is -infinity.
+    1 rs1 is a negative normal number.
+    2 rs1 is a negative subnormal number.
+    3 rs1 is -0.
+    4 rs1 is +0.
+    5 rs1 is a positive subnormal number.
+    6 rs1 is a positive normal number.
+    7 rs1 is +infinity.
+    8 rs1 is a signaling NaN.
+    9 rs1 is a quiet NaN.
+    */
+var sign_bit_d [BIT]
+var exponent_d [card(11)]
+var precision_d [card(52)]
+
+op fclass_d(rd: X, rs1: F)
+  syntax = format("fclass.d %s, %s", rd.syntax, rs1.syntax)
+  image  = format("1110001%5s%5s%3s%5s1010011", "00000", rs1.image, "001", rd.image)
+  action = {
+    temp_fpd = cast(FLOAT64, rs1);
+    sign_bit_d = rs1<63>;
+    exponent_d = rs1<62..52>;
+    precision_d = rs1<51..0>;
+    rd = 0;
+
+    if sign_bit_d == 1 && exponent_d == coerce(card(11), 0x7ff) && precision_d == 0 then rd<0> = 1;
+    elif sign_bit_d == 1 && exponent_d == 0 && precision_d == 0 then rd<3> = 1;
+    elif sign_bit_d == 0 && exponent_d == 0 && precision_d == 0 then rd<4> = 1;
+    elif sign_bit_d == 0 && exponent_d == coerce(card(11), 0x7ff) && precision_d == 0 then rd<7> = 1;
+    elif is_signaling_nan(temp_fpd) then rd<8> = 1;
+    elif is_nan(temp_fpd) then rd<9> = 1;
+    elif sign_bit_d == 0 && exponent_d == coerce(card(11), 0) then rd<5> = 1;
+    elif sign_bit_d == 1 && exponent_d == coerce(card(11), 0) then rd<2> = 1;
+    elif sign_bit_d == 1 then rd<1> = 1; // TODO:
+    elif sign_bit_d == 0 then rd<6> = 1; // TODO:
+    else
+      rd = 0;
+    endif;
+  }
+
+//==================================================================================================
+// Pseudoinstructions
+//==================================================================================================
+
+// Copy double-precision register
+pseudo op fmv_d(rd: F, rs: F)
+  syntax = format("fmv.d %s, %s", rd.syntax, rs.syntax)
+  image  = format("%32s", fsgnj_d(rd, rs, rs).image)
+  action = {
+    fsgnj_d(rd, rs, rs).action;
+  }
+
+// Double-precision absolute value
+pseudo op fabs_d(rd: F, rs: F)
+  syntax = format("fabs.d %s, %s", rd.syntax, rs.syntax)
+  image  = format("%32s", fsgnjx_d(rd, rs, rs).image)
+  action = {
+    fsgnjx_d(rd, rs, rs).action;
+  }
+
+// Double-precision negate
+pseudo op fneg_d(rd: F, rs: F)
+  syntax = format("fneg.d %s, %s", rd.syntax, rs.syntax)
+  image  = format("%32s", fsgnjn_d(rd, rs, rs).image)
+  action = {
+    fsgnjn_d(rd, rs, rs).action;
+  }
+
+op rv32d_pseudo = fmv_d
+                | fabs_d
+                | fneg_d
+
+//==================================================================================================
+
+op rv32d = fld
+         | fsd
+         | fadd_d
+         | fsub_d
+         | fmul_d
+         | fdiv_d
+         | fmin_d
+         | fmax_d
+         | fsqrt_d
+         | fsgnj_d
+         | fsgnjn_d
+         | fsgnjx_d
+         | fmadd_d
+         | fmsub_d
+         | fnmadd_d
+         | fnmsub_d
+         | fcvt_w_d
+         | fcvt_w_d2
+         | fcvt_wu_d
+         | fcvt_wu_d2
+         | fcvt_d_w
+         | fcvt_d_wu
+         | fcvt_s_d
+         | fcvt_d_s
+         | feq_d
+         | flt_d
+         | fle_d
+         | fclass_d
+         | rv32d_pseudo
+
+//==================================================================================================
+
+#endif

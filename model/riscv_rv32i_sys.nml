@@ -1,0 +1,575 @@
+/*
+ * Copyright 2017-2019 ISP RAS (http://www.ispras.ru)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+#ifndef RISCV_RV32I_SYS_INCLUDED
+#define RISCV_RV32I_SYS_INCLUDED
+
+#include "riscv_csreg.nml"
+
+//==================================================================================================
+// System instructions
+//==================================================================================================
+
+var pc_alignment_mask[XWORD]
+var npc[XWORD]
+
+/*
+   Instructions (number: 10):
+     ECALL
+     EBREAK
+     FENCE
+     FENCE.I
+     MRET
+     SRET
+     URET
+     WFI
+     CSRRW
+     CSRRS
+     CSRRC
+     CSRRWI
+     CSRRSI
+     CSRRCI
+*/
+
+/* The ECALL instruction is used to make a request to the supporting execution environment. */
+op ecall()
+  syntax = format("ecall")
+  image  = format("%12s00000%3s00000%7s", "000000000000", "000", "1110011")
+  action = {
+  /*
+    if PRV == PRV_U then
+      t_cause = CAUSE_USER_ECALL;
+      exception("user_ecall");
+    elif PRV == PRV_S then
+      t_cause = CAUSE_SUPERVISOR_ECALL;
+      exception("supervisor_ecall");
+    elif PRV == PRV_M then
+      t_cause = CAUSE_MACHINE_ECALL;
+      exception("machine_ecall");
+    endif;
+    */
+  }
+
+/* The EBREAK instruction is used by debuggers to cause control to be transferred back to
+   a debugging environment. */
+op ebreak()
+  syntax = format("ebreak")
+  image  = format("%12s00000%3s00000%7s", "000000000001", "000", "1110011")
+  action = {
+  /*
+    t_cause = CAUSE_BREAKPOINT;
+    exception("breakpoint");
+    */
+  }
+
+op fence()//(pred: card(4), succ: card(4))
+  // syntax = format("fence 0x%x, 0x%x", pred, succ) TODO:
+  syntax = format("fence")
+  image  = format("%4s%4s%4s00000%3s00000%7s", "0000", "0000", "0000", "000", "0001111")
+  action = {
+    // Empty
+  }
+
+op fence_i()
+  syntax = format("fence.i")
+  image  = format("%12s00000%3s00000%7s", "000000000000", "001", "0001111")
+  action = {
+    // Empty (TODO: all tags = -1;)
+  }
+
+/*
+  Trap-Return Instructions
+
+  Format: mret
+          sret
+          uret
+
+  Instructions to return from trap are encoded under the PRIV minor opcode.
+  To return after handling a trap, there are separate trap return instructions per privilege level:
+  MRET, SRET, and URET. MRET is always provided, while SRET must be provided if supervisor
+  mode is supported. URET is only provided if user-mode traps are supported. An x RET instruction
+  can be executed in privilege mode x or higher, where executing a lower-privilege x RET instruction
+  will pop the relevant lower-privilege interrupt enable and privilege mode stack. In addition to
+  manipulating the privilege stack, xRET sets the pc to the value stored in the x epc register.
+*/
+internal op xret(pc: CSR_MODE)
+  action = {
+    // check privileges and pop the privilege stack.
+    PC = pc;
+  }
+
+op mret()
+  syntax = format("mret")
+  image  = format("00110000001000000000000001110011")
+  action = {
+  /*
+    //require_privilege(PRV_M);
+    if !(PRV >= PRV_M) then
+      t_cause = CAUSE_ILLEGAL_INSTRUCTION;
+      exception("illegal instruction");
+    endif;
+
+    //set_pc_and_serialize(p->get_state()->mepc);
+    pc_alignment_mask = coerce(XWORD, -1);
+#ifndef RV32C
+    pc_alignment_mask[1] = 0;
+#endif
+    npc = PC_SERIALIZE_AFTER;
+    PC = pc_alignment_mask & MEPC_CSR;
+
+    //reg_t s = STATE.mstatus;
+    //reg_t prev_prv = get_field(s, MSTATUS_MPP);
+    //s = set_field(s, MSTATUS_MIE, get_field(s, MSTATUS_MPIE));
+    //s = set_field(s, MSTATUS_MPIE, 1);
+    //s = set_field(s, MSTATUS_MPP, PRV_U);
+    //p->set_privilege(prev_prv);
+    set_privilege(coerce(card(2), MSTATUS_MPP)).action;
+    //p->set_csr(CSR_MSTATUS, s);
+    MSTATUS_MIE = MSTATUS_MPIE;
+    MSTATUS_MPIE = 1;
+    MSTATUS_MPP = PRV_U;
+    */
+  }
+
+op sret()
+  syntax = format("sret")
+  image  = format("00010000001000000000000001110011")
+  action = {
+  /*
+    // require_privilege(get_field(STATE.mstatus, MSTATUS_TSR) ? PRV_M : PRV_S);
+    if MSTATUS_TSR == 1 then
+      if !(PRV >= PRV_M) then
+        t_cause = CAUSE_ILLEGAL_INSTRUCTION;
+        exception("illegal instruction");
+      endif;
+    else
+      if !(PRV >= PRV_S) then
+        t_cause = CAUSE_ILLEGAL_INSTRUCTION;
+        exception("illegal instruction");
+      endif;
+    endif;
+
+    // set_pc_and_serialize(p->get_state()->sepc);
+    pc_alignment_mask = coerce(XWORD, -1);
+#ifndef RV32C
+    pc_alignment_mask[1] = 0;
+#endif
+    npc = PC_SERIALIZE_AFTER;
+    PC = pc_alignment_mask & SEPC_CSR;
+
+    // reg_t s = STATE.mstatus;
+    // reg_t prev_prv = get_field(s, MSTATUS_SPP);
+    // s = set_field(s, MSTATUS_SIE, get_field(s, MSTATUS_SPIE));
+    // s = set_field(s, MSTATUS_SPIE, 1);
+    // s = set_field(s, MSTATUS_SPP, PRV_U);
+    // p->set_privilege(prev_prv);
+    set_privilege(coerce(card(2), MSTATUS_SPP)).action;
+    // p->set_csr(CSR_MSTATUS, s);
+    MSTATUS_SIE = MSTATUS_SPIE;
+    MSTATUS_SPIE = 1;
+    MSTATUS_SPP = PRV_U;
+    */
+  }
+
+op uret()
+  syntax = format("uret")
+  image  = format("00000000001000000000000001110011")
+  action = {
+    // Empty
+    // xret(UEPC()).action;
+  }
+
+/*
+  Wait for Interrupt
+
+  Format: wfi
+
+  The Wait for Interrupt instruction (WFI) provides a hint to the implementation that the current
+  hart can be stalled until an interrupt might need servicing. Execution of the WFI instruction
+  can also be used to inform the hardware platform that suitable interrupts should preferentially
+  be routed to this hart. WFI is available in all of the supported S and M privilege modes, and
+  optionally available to U-mode for implementations that support U-mode interrupts.
+*/
+op wfi()
+  syntax = format("wfi")
+  image  = format("00010000010100000000000001110011")
+  action = {
+  /*
+    //require_privilege(get_field(STATE.mstatus, MSTATUS_TW) ? PRV_M : PRV_S);
+    if MSTATUS_TW == 1 then
+      if !(PRV >= PRV_M) then
+        t_cause = CAUSE_ILLEGAL_INSTRUCTION;
+        exception("illegal instruction");
+      endif;
+    else
+      if !(PRV >= PRV_S) then
+        t_cause = CAUSE_ILLEGAL_INSTRUCTION;
+        exception("illegal instruction");
+      endif;
+    endif;
+
+    //wfi();
+    pc_alignment_mask = coerce(XWORD, -1);
+#ifndef RV32C
+    pc_alignment_mask[1] = 0;
+#endif
+    npc = PC_SERIALIZE_WFI;
+    // TODO:
+    */
+  }
+
+/* CSRRW (Atomic Read/Write CSR) */
+op csrrw(rd: X, csr: CSR_MODE, rs1: X)
+  syntax = format("csrrw %s, %s, %s", rd.syntax, csr.syntax, rs1.syntax)
+  image  = format("%12s%5s001%5s1110011", csr.image, rs1.image, rd.image)
+  action = {
+    if rd.i != 0 then
+      rd = zero_extend(XWORD, csr);
+    endif;
+    csr = rs1;
+  }
+
+/* CSRRS (Atomic Read and Set Bits in CSR) */
+op csrrs(rd: X, csr: CSR_MODE, rs1: X)
+  syntax = format("csrrs %s, %s, %s", rd.syntax, csr.syntax, rs1.syntax)
+  image  = format("%12s%5s010%5s1110011", csr.image, rs1.image, rd.image)
+  action = {
+    rd = zero_extend(XWORD, csr);
+    if rs1.i != 0 then
+      csr = csr | rs1;
+    endif;
+  }
+
+/* CSRRC (Atomic Read and Clear Bits in CSR) */
+op csrrc(rd: X, csr: CSR_MODE, rs1: X)
+  syntax = format("csrrc %s, %s, %s", rd.syntax, csr.syntax, rs1.syntax)
+  image  = format("%12s%5s011%5s1110011", csr.image, rs1.image, rd.image)
+  action = {
+    rd = zero_extend(XWORD, csr);
+    if rs1.i != 0 then
+      csr = csr & ~rs1;
+    endif;
+  }
+
+/* The CSRRWI, CSRRSI, and CSRRCI variants are similar to CSRRW, CSRRS, and CSRRC re-
+  spectively, except they update the CSR using an XLEN-bit value obtained by zero-extending a 5-bit
+  unsigned immediate (uimm[4:0]) */
+op csrrwi(rd: X, csr: CSR_MODE, imm: card(5))
+  syntax = format("csrrwi %s, %s, 0x%x", rd.syntax, csr.syntax, imm)
+  image  = format("%12s%5s101%5s1110011", csr.image, imm, rd.image)
+  action = {
+    if rd.i != 0 then
+      rd = zero_extend(XWORD, csr);
+    endif;
+    csr = zero_extend(XWORD, imm);
+  }
+
+op csrrsi(rd: X, csr: CSR_MODE, imm: card(5))
+  syntax = format("csrrsi %s, %s, 0x%x", rd.syntax, csr.syntax, imm)
+  image  = format("%12s%5s110%5s1110011", csr.image, imm, rd.image)
+  action = {
+    rd = zero_extend(XWORD, csr);
+    if imm != 0 then
+      csr = csr | zero_extend(XWORD, imm);
+    endif;
+  }
+
+op csrrci(rd: X, csr: CSR_MODE, imm: card(5))
+  syntax = format("csrrci %s, %s, 0x%x", rd.syntax, csr.syntax, imm)
+  image  = format("%12s%5s111%5s1110011", csr.image, imm, rd.image)
+  action = {
+    rd = zero_extend(XWORD, csr);
+    if imm != 0 then
+      csr = csr & ~zero_extend(XWORD, imm);
+    endif;
+  }
+
+//==================================================================================================
+// Pseudoinstructions
+//==================================================================================================
+
+// Write CSR
+pseudo op csrw(csr: CSR_MODE, rs1: X)
+  syntax = format("csrw %s, %s", csr.syntax, rs1.syntax)
+  image  = format("%32s", csrrw(X(0), csr, rs1).image)
+  action = {
+    csrrw(X(0), csr, rs1).action;
+  }
+
+// Read CSR
+pseudo op csrr(rd: X, csr: CSR_MODE)
+  syntax = format("csrr %s, %s", rd.syntax, csr.syntax)
+  image  = format("%32s", csrrs(rd, csr, X(0)).image)
+  action = {
+    csrrs(rd, csr, X(0)).action;
+  }
+
+// Set bits in CSR
+pseudo op csrs(csr: CSR_MODE, rs1: X)
+  syntax = format("csrs %s, %s", csr.syntax, rs1.syntax)
+  image  = format("%32s", csrrs(X(0), csr, rs1).image)
+  action = {
+    csrrs(X(0), csr, rs1).action;
+  }
+
+// Clear bits in CSR
+pseudo op csrc(csr: CSR_MODE, rs1: X)
+  syntax = format("csrc %s, %s", csr.syntax, rs1.syntax)
+  image  = format("%32s", csrrc(X(0), csr, rs1).image)
+  action = {
+    csrrc(X(0), csr, rs1).action;
+  }
+
+// Write CSR, immediate
+pseudo op csrwi(csr: CSR_MODE, imm: card(5))
+  syntax = format("csrwi %s, 0x%x", csr.syntax, imm)
+  image  = format("%32s", csrrwi(X(0), csr, imm).image)
+  action = {
+    csrrwi(X(0), csr, imm).action;
+  }
+
+// Set bits in CSR, immediate
+pseudo op csrsi(csr: CSR_MODE, imm: card(5))
+  syntax = format("csrsi %s, 0x%x", csr.syntax, imm)
+  image  = format("%32s", csrrsi(X(0), csr, imm).image)
+  action = {
+    csrrsi(X(0), csr, imm).action;
+  }
+
+// Clear bits in CSR, immediate
+pseudo op csrci(csr: CSR_MODE, imm: card(5))
+  syntax = format("csrci %s, 0x%x", csr.syntax, imm)
+  image  = format("%32s", csrrci(X(0), csr, imm).image)
+  action = {
+    csrrci(X(0), csr, imm).action;
+  }
+
+// Read FP control/status register
+pseudo op frcsr(rd: X)
+  syntax = format("frcsr %s", rd.syntax)
+  image  = format("%32s", csrrs(rd, FCSR(), X(0)).image)
+  action = {
+    csrrs(rd, FCSR(), X(0)).action;
+  }
+
+// Swap FP control/status register
+pseudo op fscsr(rd: X, rs: X)
+  syntax = format("fscsr %s, %s", rd.syntax, rs.syntax)
+  image  = format("%32s", csrrw(rd, FCSR(), rs).image)
+  action = {
+    csrrw(rd, FCSR(), rs).action;
+  }
+
+// Write FP control/status register
+pseudo op fscsr2(rs: X)
+  syntax = format("fscsr %s", rs.syntax)
+  image  = format("%32s", csrrw(X(0), FCSR(), rs).image)
+  action = {
+    csrrw(X(0), FCSR(), rs).action;
+  }
+
+// Read FP rounding mode
+pseudo op frrm(rd: X)
+  syntax = format("frrm %s", rd.syntax)
+  image  = format("%32s", csrrs(rd, FRM(), X(0)).image)
+  action = {
+    csrrs(rd, FRM(), X(0)).action;
+  }
+
+// Swap FP rounding mode
+pseudo op fsrm(rd: X, rs: X)
+  syntax = format("fsrm %s, %s", rd.syntax, rs.syntax)
+  image  = format("%32s", csrrw(rd, FRM(), rs).image)
+  action = {
+    csrrw(rd, FRM(), rs).action;
+  }
+
+// Write FP rounding mode
+pseudo op fsrm2(rs: X)
+  syntax = format("fsrm %s", rs.syntax)
+  image  = format("%32s", csrrw(X(0), FRM(), rs).image)
+  action = {
+    csrrw(X(0), FRM(), rs).action;
+  }
+
+// Swap FP rounding mode, immediate
+pseudo op fsrmi(rd: X, imm: card(5))
+  syntax = format("fsrmi %s, 0x%x", rd.syntax, imm)
+  image  = format("%32s", csrrwi(rd, FRM(), imm).image)
+  action = {
+    csrrwi(rd, FRM(), imm).action;
+  }
+
+// Write FP rounding mode, immediate
+pseudo op fsrmi2(imm: card(5))
+  syntax = format("fsrmi 0x%x", imm)
+  image  = format("%32s", csrrwi(X(0), FRM(), imm).image)
+  action = {
+    csrrwi(X(0), FRM(), imm).action;
+  }
+
+// Read FP exception flags
+pseudo op frflags(rd: X)
+  syntax = format("frflags %s", rd.syntax)
+  image  = format("%32s", csrrs(rd, FFLAGS(), X(0)).image)
+  action = {
+    csrrs(rd, FFLAGS(), X(0)).action;
+  }
+
+// Swap FP exception flags
+pseudo op fsflags(rd: X, rs: X)
+  syntax = format("fsflags %s, %s", rd.syntax, rs.syntax)
+  image  = format("%32s", csrrw(rd, FFLAGS(), rs).image)
+  action = {
+    csrrw(rd, FFLAGS(), rs).action;
+  }
+
+// Write FP exception flags
+pseudo op fsflags2(rs: X)
+  syntax = format("fsflags %s", rs.syntax)
+  image  = format("%32s", csrrw(X(0), FFLAGS(), rs).image)
+  action = {
+    csrrw(X(0), FFLAGS(), rs).action;
+  }
+
+// Swap FP exception flags, immediate
+pseudo op fsflagsi(rd: X, imm: card(5))
+  syntax = format("fsflagsi %s, 0x%x", rd.syntax, imm)
+  image  = format("%32s", csrrwi(rd, FFLAGS(), imm).image)
+  action = {
+    csrrwi(rd, FFLAGS(), imm).action;
+  }
+
+// Write FP exception flags, immediate
+pseudo op fsflagsi2(imm: card(5))
+  syntax = format("fsflagsi 0x%x", imm)
+  image  = format("%32s", csrrwi(X(0), FFLAGS(), imm).image)
+  action = {
+    csrrwi(X(0), FFLAGS(), imm).action;
+  }
+
+/*
+ Read instructions-retired counter
+ rdinstret[h] rd -> csrrs rd, instret[h], x0
+*/
+pseudo op rdinstret(rd: X)
+  syntax = format("rdinstret %s", rd.syntax)
+  image  = format("%s", csrrs(rd, INSTRET(), X(0)).image)
+  action = {
+    csrrs(rd, INSTRET(), X(0)).action;
+  }
+
+#ifndef RV64I
+pseudo op rdinstreth(rd: X)
+  syntax = format("rdinstreth %s", rd.syntax)
+  image  = format("%s", csrrs(rd, INSTRETH(), X(0)).image)
+  action = {
+    csrrs(rd, INSTRETH(), X(0)).action;
+  }
+#endif
+
+/*
+ Read cycle counter
+ rdcycle[h] rd -> csrrs rd, cycle[h], x0
+*/
+pseudo op rdcycle(rd: X)
+  syntax = format("rdcycle %s", rd.syntax)
+  image  = format("%s", csrrs(rd, CYCLE(), X(0)).image)
+  action = {
+    csrrs(rd, CYCLE(), X(0)).action;
+  }
+
+#ifndef RV64I
+pseudo op rdcycleh(rd: X)
+  syntax = format("rdcycleh %s", rd.syntax)
+  image  = format("%s", csrrs(rd, CYCLEH(), X(0)).image)
+  action = {
+    csrrs(rd, CYCLEH(), X(0)).action;
+  }
+#endif
+
+/*
+ Read real-time clock
+ rdtime[h] rd -> csrrs rd, time[h], x0
+*/
+pseudo op rdtime(rd: X)
+  syntax = format("rdtime %s", rd.syntax)
+  image  = format("%s", csrrs(rd, TIME(), X(0)).image)
+  action = {
+    csrrs(rd, TIME(), X(0)).action;
+  }
+
+#ifndef RV64I
+pseudo op rdtimeh(rd: X)
+  syntax = format("rdtimeh %s", rd.syntax)
+  image  = format("%s", csrrs(rd, TIMEH(), X(0)).image)
+  action = {
+    csrrs(rd, TIMEH(), X(0)).action;
+  }
+#endif
+
+//==================================================================================================
+// Instruction Groups
+//==================================================================================================
+
+op rv32i_system = ecall
+                | ebreak
+                | fence
+                | fence_i
+                | mret
+                | sret
+                | uret
+                | wfi
+                | csrrw
+                | csrrs
+                | csrrc
+                | csrrwi
+                | csrrsi
+                | csrrci
+
+op rv32i_pseudo_system = csrw
+                       | csrr
+                       | csrs
+                       | csrc
+                       | csrwi
+                       | csrsi
+                       | csrci
+                       | frcsr
+                       | fscsr
+                       | fscsr2
+                       | frrm
+                       | fsrm
+                       | fsrm2
+                       | fsrmi
+                       | fsrmi2
+                       | frflags
+                       | fsflags
+                       | fsflags2
+                       | fsflagsi
+                       | fsflagsi2
+                       | rdinstret
+                       | rdcycle
+                       | rdtime
+#ifndef RV64I
+                       | rdinstreth
+                       | rdcycleh
+                       | rdtimeh
+#endif
+
+op rv32i_sys = rv32i_system // 10
+             | rv32i_pseudo_system // 26
+
+#endif
