@@ -1,6 +1,6 @@
 # RISC-V nML
 
-__RISC-V nML__ is a specification of ISA RISC-V in nML architecture decription language.
+__RISC-V nML__ is a specification of ISA RISC-V in nML architecture description language.
 
 ## MicroTESK
 
